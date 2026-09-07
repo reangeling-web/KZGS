@@ -11,31 +11,11 @@
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>html,body,#root{height:100%} body{margin:0}</style>
 </head>
 <body>
 <div id="root"></div>
-
-<script>
-/* 資料存在這台電腦的瀏覽器裡，不會上傳到 GitHub */
-window.storage = {
-  async get(key){
-    const v = localStorage.getItem(key);
-    if (v === null) throw new Error("no value");
-    return { key, value: v, shared: false };
-  },
-  async set(key, value){
-    localStorage.setItem(key, value);
-    return { key, value, shared: false };
-  },
-  async delete(key){ localStorage.removeItem(key); return { key, deleted: true }; },
-  async list(prefix = ""){
-    const keys = Object.keys(localStorage).filter(k => k.startsWith(prefix));
-    return { keys, prefix, shared: false };
-  }
-};
-</script>
-
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
@@ -165,8 +145,85 @@ const TONE = {
   bad: { t: C.badText, b: C.badBg, bar: C.badBar },
 };
 
+
+/* ------------------------------------------------------- Supabase 資料層 */
+const SUPA_URL = "https://ywvhazatbdmkhpztgyig.supabase.co";
+const SUPA_KEY = "sb_publishable_V386LMRY7IEERgMnBc5FCQ_rsoX29zB";
+const sb = window.supabase.createClient(SUPA_URL, SUPA_KEY);
+
+const toApp = (r) => ({
+  id: r.id, 單號: r.order_no, 客戶ID: r.customer_code || "", 單位: r.org, 客群: r.segment,
+  聯絡人: r.contact || "", 電話: r.phone || "", 日期: r.visit_date, 場次: r.slot, 包場: r.buyout,
+  全票: r.full_ticket, 半票: r.half_ticket, 免票: r.free_ticket, 愛心: r.love_ticket,
+  餐飲: r.meals, 劇院: r.theater, PR廳數: r.party_rooms, PR方案: r.party_plan || "",
+  備註: r.note || "", 狀態: r.status, 建立: r.created_on, 到期: r.hold_until,
+});
+
+const toDb = (o) => {
+  const d = {};
+  const map = {
+    單號: "order_no", 客戶ID: "customer_code", 單位: "org", 客群: "segment",
+    聯絡人: "contact", 電話: "phone", 日期: "visit_date", 場次: "slot",
+    全票: "full_ticket", 半票: "half_ticket", 免票: "free_ticket", 愛心: "love_ticket",
+    餐飲: "meals", 劇院: "theater", PR廳數: "party_rooms", PR方案: "party_plan",
+    備註: "note", 狀態: "status", 建立: "created_on", 到期: "hold_until",
+  };
+  for (const k in map) if (o[k] !== undefined) d[map[k]] = o[k];
+  if (o.包場 !== undefined) d.buyout = !!o.包場;
+  for (const n of ["full_ticket","half_ticket","free_ticket","love_ticket","meals","theater","party_rooms"])
+    if (d[n] !== undefined) d[n] = +d[n] || 0;
+  if (d.hold_until === "") d.hold_until = null;
+  return d;
+};
+
+const pick = (orders, id) => orders.find((o) => o.id === id) || {};
+
+function Splash({ text }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center"
+      style={{ background: C.paper, color: C.sub, fontFamily: FONT }}>{text}</div>
+  );
+}
+
+function Login() {
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true); setErr("");
+    const { error } = await sb.auth.signInWithPassword({ email, password: pw });
+    if (error) setErr("帳號或密碼不對");
+    setBusy(false);
+  };
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4"
+      style={{ background: C.paper, fontFamily: FONT, color: C.ink }}>
+      <style>{CSS}</style>
+      <div className="rounded p-6" style={{ background: C.card, border: `1px solid ${C.line}`, width: 320 }}>
+        <h1 className="text-lg font-semibold">團體檔期</h1>
+        <p className="text-xs mt-1 mb-4" style={{ color: C.sub }}>KidZania Taipei　內部使用</p>
+        <div className="grid gap-2">
+          <input value={email} onChange={(e) => setEmail(e.target.value)}
+            placeholder="公司信箱" autoComplete="username" style={inp} />
+          <input type="password" value={pw} onChange={(e) => setPw(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && go()}
+            placeholder="密碼" autoComplete="current-password" style={inp} />
+        </div>
+        {err && <p className="text-xs mt-2" style={{ color: C.badText }}>{err}</p>}
+        <button onClick={go} disabled={busy}
+          className="w-full mt-4 px-3 py-2 text-sm rounded"
+          style={{ background: C.brand, color: "#fff" }}>
+          {busy ? "登入中…" : "登入"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ App */
 function App() {
+  const [session, setSession] = useState(undefined);   // undefined = 還在確認
   const [orders, setOrders] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState("檔期");
@@ -178,80 +235,91 @@ function App() {
   const [gate, setGate] = useState(false);
   const [lastNo, setLastNo] = useState(null);
   const [toast, setToast] = useState(null);
-  const saving = useRef(false);
 
+  const say = (m) => { setToast(m); setTimeout(() => setToast(null), 3200); };
+
+  /* 登入狀態 */
   useEffect(() => {
-    (async () => {
-      try {
-        const r = await window.storage.get("kz_group_orders");
-        if (r && r.value) setOrders(JSON.parse(r.value));
-      } catch (e) { /* 尚無資料 */ }
-      setLoaded(true);
-    })();
+    sb.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: sub } = sb.auth.onAuthStateChange((_e, s) => setSession(s));
+    return () => sub.subscription.unsubscribe();
   }, []);
 
-  const persist = async (next) => {
-    setOrders(next);
-    saving.current = true;
-    try { await window.storage.set("kz_group_orders", JSON.stringify(next)); }
-    catch (e) { say("資料沒存起來，請再試一次"); }
-    saving.current = false;
+  /* 載入 + 即時同步：任何一台裝置改動，其他裝置立刻跟著變 */
+  const reload = async () => {
+    const { data, error } = await sb.from("bookings").select("*").order("visit_date");
+    if (error) { say("讀取失敗：" + error.message); return; }
+    setOrders((data || []).map(toApp));
+    setLoaded(true);
   };
-  const say = (m) => { setToast(m); setTimeout(() => setToast(null), 2600); };
 
-  const addOrder = (o) => {
+  useEffect(() => {
+    if (!session) return;
+    reload();
+    const ch = sb.channel("bookings-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "bookings" }, reload)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [session]);
+
+  const addOrder = async (o) => {
     const created = todayISO();
     const rec = {
       ...o,
-      id: `${Date.now()}`,
       單號: makeOrderNo(new Set(orders.map((x) => x.單號))),
       客戶ID: "",
       狀態: "檔期暫留",
       建立: created,
       到期: addDays(created, holdDays(created, o.日期)),
     };
-    persist([...orders, rec]);
+    const { error } = await sb.from("bookings").insert(toDb(rec));
+    if (error) { say(error.message.replace(/^.*?:\s*/, "")); return; }
     setFormOpen(false);
     setPicked(o.日期);
     setLastNo(rec.單號);
-    say(`單號 ${rec.單號}　檔期暫留至 ${rec.到期}`);
+    await reload();
   };
 
-  const setField = (id, key, val) =>
-    persist(orders.map((x) => (x.id === id ? { ...x, [key]: val } : x)));
-
-  const updateOrder = (o) => {
-    persist(orders.map((x) => (x.id === o.id ? { ...x, ...o } : x)));
-    setEditing(null);
-    say("已更新，名額同步重算");
+  const patch = async (id, fields) => {
+    const { error } = await sb.from("bookings").update(fields).eq("id", id);
+    if (error) { say(error.message.replace(/^.*?:\s*/, "")); return false; }
+    await reload();
+    return true;
   };
 
-  const move = (id, status) => {
-    persist(orders.map((o) => {
-      if (o.id !== id) return o;
-      const n = { ...o, 狀態: status };
-      if (status === "檔期暫留") n.到期 = addDays(todayISO(), holdDays(todayISO(), o.日期));
-      if (!EXPIRABLE.includes(status)) n.到期 = status === "流失" ? o.到期 : null;
-      return n;
-    }));
+  const setField = (id, key, val) => patch(id, toDb({ [key]: val, ...pick(orders, id) }));
+
+  const updateOrder = async (o) => {
+    const ok = await patch(o.id, toDb(o));
+    if (ok) { setEditing(null); say("已更新，名額同步重算"); }
   };
-  const renew = (id) => {
-    persist(orders.map((o) => o.id === id
-      ? { ...o, 到期: addDays(todayISO(), holdDays(todayISO(), o.日期)) } : o));
-    say("保留期已重新計算");
+
+  const move = async (id, status) => {
+    const o = orders.find((x) => x.id === id);
+    const f = { status };
+    if (status === "檔期暫留") f.hold_until = addDays(todayISO(), holdDays(todayISO(), o.日期));
+    if (!EXPIRABLE.includes(status) && status !== "流失") f.hold_until = null;
+    await patch(id, f);
   };
-  const remove = (id) => persist(orders.filter((o) => o.id !== id));
+
+  const renew = async (id) => {
+    const o = orders.find((x) => x.id === id);
+    if (await patch(id, { hold_until: addDays(todayISO(), holdDays(todayISO(), o.日期)) }))
+      say("保留期已重新計算");
+  };
+
+  const remove = async (id) => {
+    const { error } = await sb.from("bookings").delete().eq("id", id);
+    if (error) { say(error.message); return; }
+    await reload();
+  };
+
+  if (session === undefined) return <Splash text="確認登入狀態…" />;
+  if (!session) return <Login />;
 
   const expiredList = orders.filter(isExpired);
 
-  if (!loaded) {
-    return (
-      <div className="min-h-screen flex items-center justify-center"
-           style={{ background: C.paper, color: C.sub, fontFamily: FONT }}>
-        讀取檔期資料…
-      </div>
-    );
-  }
+  if (!loaded) return <Splash text="讀取檔期資料…" />;
 
   return (
     <div className="min-h-screen" style={{ background: C.paper, color: C.ink, fontFamily: FONT }}>
@@ -289,6 +357,8 @@ function App() {
                   : { border: `1px solid ${C.line}`, color: C.sub }}>
                 {admin ? "結束管理" : "管理"}
               </button>
+              <button onClick={() => sb.auth.signOut()} className="px-2.5 py-1.5 text-xs rounded"
+                style={{ border: `1px solid ${C.line}`, color: C.sub }}>登出</button>
             </nav>
           </div>
         </div>
