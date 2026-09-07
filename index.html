@@ -295,6 +295,28 @@ function App() {
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-5">
+        {lastNo && (
+          <div className="mb-4 rounded p-4 flex items-center justify-between gap-3 flex-wrap"
+            style={{ background: C.card, border: `2px solid ${C.brand}` }}>
+            <div>
+              <p className="text-xs" style={{ color: C.sub }}>已登記，請記下單號</p>
+              <p className="text-xl font-semibold tnum" style={{ color: C.brand }}>{lastNo}</p>
+              <p className="text-xs mt-1" style={{ color: C.sub }}>
+                報價與收款以這組單號對應，系統不記錄金額。
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => navigator.clipboard?.writeText(lastNo)}
+                className="px-3 py-2 text-sm rounded" style={{ border: `1px solid ${C.line}` }}>
+                複製
+              </button>
+              <button onClick={() => setLastNo(null)}
+                className="px-3 py-2 text-sm rounded" style={{ background: C.brand, color: "#fff" }}>
+                知道了
+              </button>
+            </div>
+          </div>
+        )}
         {tab === "檔期" && (
           <CalendarView
             orders={orders} cursor={cursor} setCursor={setCursor}
@@ -306,41 +328,17 @@ function App() {
           <TaskView orders={orders} onMove={move} onRenew={renew} onRemove={remove} onEdit={setEditing} onField={setField} />
         )}
         {tab === "匯出" && admin && <ExportView orders={orders} say={say} />}
+
+        {(formOpen || editing) && (
+          <RequestForm
+            date={picked} orders={orders} editing={editing}
+            onClose={() => { setFormOpen(false); setEditing(null); }}
+            onSubmit={editing ? updateOrder : addOrder}
+          />
+        )}
       </main>
 
-      {(formOpen || editing) && (
-        <RequestForm
-          date={picked} orders={orders} editing={editing}
-          onClose={() => { setFormOpen(false); setEditing(null); }}
-          onSubmit={editing ? updateOrder : addOrder}
-        />
-      )}
-
       {gate && <Gate onPass={() => { setAdmin(true); setGate(false); }} onClose={() => setGate(false)} />}
-
-      {lastNo && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center p-4"
-          style={{ background: "rgba(36,26,28,.45)" }} onClick={() => setLastNo(null)}>
-          <div className="rounded p-5 text-center" style={{ background: C.card, maxWidth: 360 }}
-            onClick={(e) => e.stopPropagation()}>
-            <p className="text-sm" style={{ color: C.sub }}>已登記，請記下單號</p>
-            <p className="text-2xl font-semibold tnum my-3" style={{ color: C.brand }}>{lastNo}</p>
-            <p className="text-xs" style={{ color: C.sub }}>
-              報價與收款請以這組單號對應。系統不記錄金額。
-            </p>
-            <div className="flex gap-2 mt-4">
-              <button onClick={() => { navigator.clipboard?.writeText(lastNo); }}
-                className="flex-1 px-3 py-2 text-sm rounded" style={{ border: `1px solid ${C.line}` }}>
-                複製單號
-              </button>
-              <button onClick={() => setLastNo(null)}
-                className="flex-1 px-3 py-2 text-sm rounded" style={{ background: C.brand, color: "#fff" }}>
-                知道了
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {toast && (
         <div className="fixed left-1/2 bottom-6 px-4 py-2.5 rounded text-sm toast"
@@ -623,13 +621,17 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
 
   const expiry = addDays(todayISO(), holdDays(todayISO(), f.日期));
 
-  return (
-    <div className="fixed inset-0 z-20 flex items-end sm:items-center justify-center p-0 sm:p-4"
-      style={{ background: "rgba(36,26,28,.45)" }} onClick={onClose}>
-      <div className="w-full sm:max-w-lg rounded-t-lg sm:rounded-lg overflow-y-auto"
-        style={{ background: C.card, maxHeight: "92vh" }} onClick={(e) => e.stopPropagation()}>
+  const box = useRef(null);
+  useEffect(() => {
+    box.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
 
-        <div className="px-4 py-3 flex items-center justify-between sticky top-0"
+  return (
+    <div ref={box} className="mt-4 rounded scroll-mt-4"
+      style={{ background: C.card, border: `2px solid ${C.brand}` }}>
+      <div>
+
+        <div className="px-4 py-3 flex items-center justify-between"
           style={{ background: C.card, borderBottom: `1px solid ${C.line}` }}>
           <h2 className="font-semibold">{editing ? `修改需求　${editing.客戶ID}` : "登記團體需求"}</h2>
           <button onClick={onClose} className="text-xl leading-none px-2" style={{ color: C.sub }}>×</button>
@@ -750,7 +752,7 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
           </p>
         </div>
 
-        <div className="px-4 py-3 flex gap-2 sticky bottom-0"
+        <div className="px-4 py-3 flex gap-2"
           style={{ background: C.card, borderTop: `1px solid ${C.line}` }}>
           <button onClick={onClose} className="px-4 py-2 text-sm rounded flex-1"
             style={{ border: `1px solid ${C.line}` }}>取消</button>
