@@ -19,6 +19,8 @@
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
 
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import * as XLSX from "xlsx";
 
 /* ------------------------------------------------------------------ 設定 */
 const CAP_TOTAL = 1200;   // 同時在館容留
@@ -50,9 +52,7 @@ const C = {
 const SEGMENTS = ["學校", "企業", "派對", "營隊", "補教", "公益", "夥伴", "旅行社"];
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
-const FLOW = [
-  "新進件", "需求確認", "檔期暫留", "已報價", "已確認", "行前作業", "已到訪", "已結案",
-];
+const FLOW = ["檔期暫留", "已報價", "已確認", "行前作業", "已到訪", "已結案"];
 const HOLD_STATES = ["檔期暫留", "已報價", "已確認", "行前作業"];
 const EXPIRABLE = ["檔期暫留", "已報價"];
 
@@ -145,7 +145,6 @@ const TONE = {
   bad: { t: C.badText, b: C.badBg, bar: C.badBar },
 };
 
-
 /* ------------------------------------------------------- Supabase 資料層 */
 const SUPA_URL = "https://ywvhazatbdmkhpztgyig.supabase.co";
 const SUPA_KEY = "sb_publishable_V386LMRY7IEERgMnBc5FCQ_rsoX29zB";
@@ -159,16 +158,17 @@ const toApp = (r) => ({
   備註: r.note || "", 狀態: r.status, 建立: r.created_on, 到期: r.hold_until,
 });
 
+const DB_MAP = {
+  單號: "order_no", 客戶ID: "customer_code", 單位: "org", 客群: "segment",
+  聯絡人: "contact", 電話: "phone", 日期: "visit_date", 場次: "slot",
+  全票: "full_ticket", 半票: "half_ticket", 免票: "free_ticket", 愛心: "love_ticket",
+  餐飲: "meals", 劇院: "theater", PR廳數: "party_rooms", PR方案: "party_plan",
+  備註: "note", 狀態: "status", 建立: "created_on", 到期: "hold_until",
+};
+
 const toDb = (o) => {
   const d = {};
-  const map = {
-    單號: "order_no", 客戶ID: "customer_code", 單位: "org", 客群: "segment",
-    聯絡人: "contact", 電話: "phone", 日期: "visit_date", 場次: "slot",
-    全票: "full_ticket", 半票: "half_ticket", 免票: "free_ticket", 愛心: "love_ticket",
-    餐飲: "meals", 劇院: "theater", PR廳數: "party_rooms", PR方案: "party_plan",
-    備註: "note", 狀態: "status", 建立: "created_on", 到期: "hold_until",
-  };
-  for (const k in map) if (o[k] !== undefined) d[map[k]] = o[k];
+  for (const k in DB_MAP) if (o[k] !== undefined) d[DB_MAP[k]] = o[k];
   if (o.包場 !== undefined) d.buyout = !!o.包場;
   for (const n of ["full_ticket","half_ticket","free_ticket","love_ticket","meals","theater","party_rooms"])
     if (d[n] !== undefined) d[n] = +d[n] || 0;
@@ -176,7 +176,20 @@ const toDb = (o) => {
   return d;
 };
 
-const pick = (orders, id) => orders.find((o) => o.id === id) || {};
+const clean = (m) => String(m || "").replace(/^.*?:\s*/, "");
+
+/** 訪客看到的每日狀況：只有數字，沒有任何一筆原始資料 */
+const guestStats = (row) => {
+  if (!row) return { buyout: null, eff: [], am: CAP_CHILD, pm: CAP_CHILD,
+                     full: CAP_CHILD, amRatio: 0, pmRatio: 0 };
+  const am = row.am_left, pm = row.pm_left;
+  return {
+    buyout: row.buyout ? {} : null, eff: [],
+    am, pm, full: Math.min(am, pm),
+    amRatio: Math.min(1, (CAP_CHILD - am) / CAP_CHILD),
+    pmRatio: Math.min(1, (CAP_CHILD - pm) / CAP_CHILD),
+  };
+};
 
 function Splash({ text }) {
   return (
@@ -185,7 +198,7 @@ function Splash({ text }) {
   );
 }
 
-function Login() {
+function Login({ onClose }) {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
@@ -193,29 +206,33 @@ function Login() {
   const go = async () => {
     setBusy(true); setErr("");
     const { error } = await sb.auth.signInWithPassword({ email, password: pw });
-    if (error) setErr("帳號或密碼不對");
-    setBusy(false);
+    if (error) { setErr("帳號或密碼不對"); setBusy(false); } else onClose?.();
   };
   return (
-    <div className="min-h-screen flex items-center justify-center p-4"
-      style={{ background: C.paper, fontFamily: FONT, color: C.ink }}>
-      <style>{CSS}</style>
-      <div className="rounded p-6" style={{ background: C.card, border: `1px solid ${C.line}`, width: 320 }}>
-        <h1 className="text-lg font-semibold">團體檔期</h1>
-        <p className="text-xs mt-1 mb-4" style={{ color: C.sub }}>KidZania Taipei　內部使用</p>
+    <div className="fixed inset-0 z-30 flex items-center justify-center p-4"
+      style={{ background: "rgba(36,26,28,.45)" }} onClick={onClose}>
+      <div className="rounded p-6" style={{ background: C.card, width: 320 }}
+        onClick={(e) => e.stopPropagation()}>
+        <h2 className="font-semibold">登入</h2>
+        <p className="text-xs mt-1 mb-4" style={{ color: C.sub }}>
+          登入後才能登記需求。查檔期不需要登入。
+        </p>
         <div className="grid gap-2">
           <input value={email} onChange={(e) => setEmail(e.target.value)}
-            placeholder="公司信箱" autoComplete="username" style={inp} />
+            placeholder="公司信箱" autoComplete="username" autoFocus style={inp} />
           <input type="password" value={pw} onChange={(e) => setPw(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && go()}
             placeholder="密碼" autoComplete="current-password" style={inp} />
         </div>
         {err && <p className="text-xs mt-2" style={{ color: C.badText }}>{err}</p>}
-        <button onClick={go} disabled={busy}
-          className="w-full mt-4 px-3 py-2 text-sm rounded"
-          style={{ background: C.brand, color: "#fff" }}>
-          {busy ? "登入中…" : "登入"}
-        </button>
+        <div className="flex gap-2 mt-4">
+          <button onClick={onClose} className="flex-1 px-3 py-2 text-sm rounded"
+            style={{ border: `1px solid ${C.line}` }}>取消</button>
+          <button onClick={go} disabled={busy} className="flex-1 px-3 py-2 text-sm rounded"
+            style={{ background: C.brand, color: "#fff" }}>
+            {busy ? "登入中…" : "登入"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -225,6 +242,7 @@ function Login() {
 function App() {
   const [session, setSession] = useState(undefined);   // undefined = 還在確認
   const [orders, setOrders] = useState([]);
+  const [avail, setAvail] = useState({});
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState("檔期");
   const [cursor, setCursor] = useState({ y: 2026, m: 12 });
@@ -233,19 +251,31 @@ function App() {
   const [editing, setEditing] = useState(null);
   const [admin, setAdmin] = useState(false);
   const [gate, setGate] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
   const [lastNo, setLastNo] = useState(null);
   const [toast, setToast] = useState(null);
 
   const say = (m) => { setToast(m); setTimeout(() => setToast(null), 3200); };
+  const guest = !session;
 
-  /* 登入狀態 */
   useEffect(() => {
     sb.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: sub } = sb.auth.onAuthStateChange((_e, s) => setSession(s));
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  /* 載入 + 即時同步：任何一台裝置改動，其他裝置立刻跟著變 */
+  /* 未登入：只讀彙總檢視，讀不到任何一筆原始資料 */
+  useEffect(() => {
+    if (session !== null) return;
+    (async () => {
+      const { data } = await sb.from("availability").select("*");
+      const m = {};
+      for (const r of data || []) m[r.visit_date] = r;
+      setAvail(m); setOrders([]); setAdmin(false); setLoaded(true);
+    })();
+  }, [session]);
+
+  /* 已登入：讀完整名單，並開啟即時同步 */
   const reload = async () => {
     const { data, error } = await sb.from("bookings").select("*").order("visit_date");
     if (error) { say("讀取失敗：" + error.message); return; }
@@ -262,6 +292,8 @@ function App() {
     return () => { sb.removeChannel(ch); };
   }, [session]);
 
+  const getDay = (date) => (guest ? guestStats(avail[date]) : dayStats(orders, date));
+
   const addOrder = async (o) => {
     const created = todayISO();
     const rec = {
@@ -273,25 +305,22 @@ function App() {
       到期: addDays(created, holdDays(created, o.日期)),
     };
     const { error } = await sb.from("bookings").insert(toDb(rec));
-    if (error) { say(error.message.replace(/^.*?:\s*/, "")); return; }
-    setFormOpen(false);
-    setPicked(o.日期);
-    setLastNo(rec.單號);
+    if (error) { say(clean(error.message)); return; }
+    setFormOpen(false); setPicked(o.日期); setLastNo(rec.單號);
     await reload();
   };
 
   const patch = async (id, fields) => {
     const { error } = await sb.from("bookings").update(fields).eq("id", id);
-    if (error) { say(error.message.replace(/^.*?:\s*/, "")); return false; }
+    if (error) { say(clean(error.message)); return false; }
     await reload();
     return true;
   };
 
-  const setField = (id, key, val) => patch(id, toDb({ [key]: val, ...pick(orders, id) }));
+  const setField = (id, key, val) => patch(id, toDb({ [key]: val }));
 
   const updateOrder = async (o) => {
-    const ok = await patch(o.id, toDb(o));
-    if (ok) { setEditing(null); say("已更新，名額同步重算"); }
+    if (await patch(o.id, toDb(o))) { setEditing(null); say("已更新，名額同步重算"); }
   };
 
   const move = async (id, status) => {
@@ -310,12 +339,11 @@ function App() {
 
   const remove = async (id) => {
     const { error } = await sb.from("bookings").delete().eq("id", id);
-    if (error) { say(error.message); return; }
+    if (error) { say(clean(error.message)); return; }
     await reload();
   };
 
-  if (session === undefined) return <Splash text="確認登入狀態…" />;
-  if (!session) return <Login />;
+  if (session === undefined) return <Splash text="載入中…" />;
 
   const expiredList = orders.filter(isExpired);
 
@@ -331,7 +359,9 @@ function App() {
             <div>
               <h1 className="text-xl font-semibold tracking-tight">團體檔期</h1>
               <p className="text-xs mt-1" style={{ color: C.sub }}>
-                全票上限 {CAP_CHILD} 位・同時容留 {CAP_TOTAL} 位・包場當日不再對外開放
+                {guest
+                  ? "檔期查詢　數字為各場次可售全票數，實際成交以業務回覆為準"
+                  : `全票上限 ${CAP_CHILD} 位・同時容留 ${CAP_TOTAL} 位・包場當日不再對外開放`}
               </p>
             </div>
             <nav className="flex gap-1 items-center">
@@ -357,8 +387,6 @@ function App() {
                   : { border: `1px solid ${C.line}`, color: C.sub }}>
                 {admin ? "結束管理" : "管理"}
               </button>
-              <button onClick={() => sb.auth.signOut()} className="px-2.5 py-1.5 text-xs rounded"
-                style={{ border: `1px solid ${C.line}`, color: C.sub }}>登出</button>
             </nav>
           </div>
         </div>
@@ -389,8 +417,8 @@ function App() {
         )}
         {tab === "檔期" && (
           <CalendarView
-            orders={orders} cursor={cursor} setCursor={setCursor}
-            picked={picked} setPicked={setPicked} admin={admin}
+            getDay={getDay} cursor={cursor} setCursor={setCursor}
+            picked={picked} setPicked={setPicked} admin={admin} guest={guest}
             onNew={(d) => { setPicked(d); setFormOpen(true); }}
           />
         )}
@@ -407,6 +435,8 @@ function App() {
           />
         )}
       </main>
+
+      {showLogin && <Login onClose={() => setShowLogin(false)} />}
 
       {gate && <Gate onPass={() => { setAdmin(true); setGate(false); }} onClose={() => setGate(false)} />}
 
@@ -466,7 +496,7 @@ const CSS = `
 `;
 
 /* ------------------------------------------------------------ 檔期預覽 */
-function CalendarView({ orders, cursor, setCursor, picked, setPicked, onNew, admin }) {
+function CalendarView({ getDay, cursor, setCursor, picked, setPicked, onNew, admin, guest }) {
   const { y, m } = cursor;
   const first = new Date(y, m - 1, 1);
   const days = new Date(y, m, 0).getDate();
@@ -511,13 +541,13 @@ function CalendarView({ orders, cursor, setCursor, picked, setPicked, onNew, adm
         {cells.map((d, i) =>
           d === null
             ? <div key={i} style={{ background: C.paper, minHeight: 76 }} />
-            : <DayCell key={d} date={d} orders={orders}
+            : <DayCell key={d} date={d} s={getDay(d)}
                 selected={picked === d} onClick={() => setPicked(picked === d ? null : d)} />
         )}
       </div>
 
       {picked
-        ? <DayPanel date={picked} orders={orders} onNew={onNew} admin={admin} />
+        ? <DayPanel date={picked} s={getDay(picked)} onNew={onNew} admin={admin} guest={guest} />
         : <p className="text-sm mt-4" style={{ color: C.sub }}>
             點一個日期看細節，或直接登記需求。
           </p>}
@@ -534,8 +564,7 @@ function Legend({ color, label }) {
   );
 }
 
-function DayCell({ date, orders, selected, onClick }) {
-  const s = dayStats(orders, date);
+function DayCell({ date, s, selected, onClick }) {
   const d = parse(date);
   const hol = isHoliday(date);
   const bo = !!s.buyout;
@@ -580,8 +609,7 @@ function Bar({ ratio, left }) {
   );
 }
 
-function DayPanel({ date, orders, onNew, admin }) {
-  const s = dayStats(orders, date);
+function DayPanel({ date, s, onNew, admin, guest }) {
   const d = parse(date);
   const wk = "日一二三四五六"[d.getDay()];
   const hol = isHoliday(date);
@@ -595,18 +623,22 @@ function DayPanel({ date, orders, onNew, admin }) {
             {hol ? "假日" : "平日"}
           </span>
         </h2>
-        <button onClick={() => onNew(date)} className="px-3 py-1.5 text-sm rounded"
-          style={{ background: C.brand, color: "#fff" }}>
-          登記需求
-        </button>
+        {!guest && (
+          <button onClick={() => onNew(date)} className="px-3 py-1.5 text-sm rounded"
+            style={{ background: C.brand, color: "#fff" }}>
+            登記需求
+          </button>
+        )}
       </div>
 
       {s.buyout ? (
         <div className="rounded p-3 text-sm" style={{ background: C.badBg, color: C.badText }}>
           <strong>當日已包場</strong>，不再對外開放，上下半場一律不可售。
-          <div className="mt-1" style={{ color: C.ink }}>
-            {s.buyout.單位}・{s.buyout.場次 === "全" ? "整天" : s.buyout.場次 + "半場"}・{s.buyout.狀態}
-          </div>
+          {!guest && s.buyout.單位 && (
+            <div className="mt-1" style={{ color: C.ink }}>
+              {s.buyout.單位}・{s.buyout.場次 === "全" ? "整天" : s.buyout.場次 + "半場"}・{s.buyout.狀態}
+            </div>
+          )}
         </div>
       ) : (
         <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))" }}>
