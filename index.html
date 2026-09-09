@@ -47,7 +47,7 @@ const C = {
   badBar: "#C4707C",
 };
 
-const SEGMENTS = ["學校", "企業", "派對", "營隊", "補教", "公益", "夥伴", "旅行社"];
+const SEGMENTS = ["學校", "企業", "派對", "營隊", "補教", "公益", "夥伴", "旅行社", "員工"];
 /** 業務歸屬決定負責窗口，對照寫死，不可在介面上更動 */
 const ASSIGNMENTS = {
   "pp年度採購": "Angel",
@@ -706,7 +706,6 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
     if (child > CAP_CHILD) errors.push(`包場全票上限 ${CAP_CHILD} 位`);
     if (total > CAP_TOTAL) errors.push(`包場總人數上限 ${CAP_TOTAL} 位`);
   }
-  if (!f.包場 && f.PR廳數 > 0 && !f.PR方案) errors.push("選一個派對方案");
   if (+f.餐飲 > total && total > 0) errors.push(`餐飲數量超過總人數 ${total} 位`);
 
   const expiry = addDays(todayISO(), holdDays(todayISO(), f.日期));
