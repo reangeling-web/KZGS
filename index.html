@@ -48,11 +48,23 @@ const C = {
 };
 
 const SEGMENTS = ["學校", "企業", "派對", "營隊", "補教", "公益", "夥伴", "旅行社"];
+/** 業務歸屬決定負責窗口，對照寫死，不可在介面上更動 */
+const ASSIGNMENTS = {
+  "pp年度採購": "Angel",
+  "寒暑假營隊": "Angel",
+  "平日公私立學校": "Angel",
+  "平日課後安親班4H": "Angel",
+  "旅行社(公司/寒暑假營隊)": "Lenna",
+  "旅行社(平日公私立學校)": "Lenna",
+  "旅行社(平日5H系列團)": "Lenna",
+  "生日派對/各式派對": "Lenna",
+  "公司團體/國際學校": "Lenna",
+};
+const ownerOf = (a) => ASSIGNMENTS[a] || "";
+
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
-const FLOW = [
-  "新進件", "需求確認", "檔期暫留", "已報價", "已確認", "行前作業", "已到訪", "已結案",
-];
+const FLOW = ["檔期暫留", "已報價", "已確認", "行前作業", "已到訪", "已結案"];
 const HOLD_STATES = ["檔期暫留", "已報價", "已確認", "行前作業"];
 const EXPIRABLE = ["檔期暫留", "已報價"];
 
@@ -145,7 +157,6 @@ const TONE = {
   bad: { t: C.badText, b: C.badBg, bar: C.badBar },
 };
 
-
 /* ------------------------------------------------------- Supabase 資料層 */
 const SUPA_URL = "https://ywvhazatbdmkhpztgyig.supabase.co";
 const SUPA_KEY = "sb_publishable_V386LMRY7IEERgMnBc5FCQ_rsoX29zB";
@@ -153,22 +164,25 @@ const sb = window.supabase.createClient(SUPA_URL, SUPA_KEY);
 
 const toApp = (r) => ({
   id: r.id, 單號: r.order_no, 客戶ID: r.customer_code || "", 單位: r.org, 客群: r.segment,
+  業務歸屬: r.assignment || "", 負責窗口: r.owner || "",
   聯絡人: r.contact || "", 電話: r.phone || "", 日期: r.visit_date, 場次: r.slot, 包場: r.buyout,
   全票: r.full_ticket, 半票: r.half_ticket, 免票: r.free_ticket, 愛心: r.love_ticket,
   餐飲: r.meals, 劇院: r.theater, PR廳數: r.party_rooms, PR方案: r.party_plan || "",
   備註: r.note || "", 狀態: r.status, 建立: r.created_on, 到期: r.hold_until,
 });
 
+const DB_MAP = {
+  單號: "order_no", 客戶ID: "customer_code", 單位: "org", 客群: "segment",
+  業務歸屬: "assignment", 負責窗口: "owner",
+  聯絡人: "contact", 電話: "phone", 日期: "visit_date", 場次: "slot",
+  全票: "full_ticket", 半票: "half_ticket", 免票: "free_ticket", 愛心: "love_ticket",
+  餐飲: "meals", 劇院: "theater", PR廳數: "party_rooms", PR方案: "party_plan",
+  備註: "note", 狀態: "status", 建立: "created_on", 到期: "hold_until",
+};
+
 const toDb = (o) => {
   const d = {};
-  const map = {
-    單號: "order_no", 客戶ID: "customer_code", 單位: "org", 客群: "segment",
-    聯絡人: "contact", 電話: "phone", 日期: "visit_date", 場次: "slot",
-    全票: "full_ticket", 半票: "half_ticket", 免票: "free_ticket", 愛心: "love_ticket",
-    餐飲: "meals", 劇院: "theater", PR廳數: "party_rooms", PR方案: "party_plan",
-    備註: "note", 狀態: "status", 建立: "created_on", 到期: "hold_until",
-  };
-  for (const k in map) if (o[k] !== undefined) d[map[k]] = o[k];
+  for (const k in DB_MAP) if (o[k] !== undefined) d[DB_MAP[k]] = o[k];
   if (o.包場 !== undefined) d.buyout = !!o.包場;
   for (const n of ["full_ticket","half_ticket","free_ticket","love_ticket","meals","theater","party_rooms"])
     if (d[n] !== undefined) d[n] = +d[n] || 0;
@@ -176,7 +190,7 @@ const toDb = (o) => {
   return d;
 };
 
-const pick = (orders, id) => orders.find((o) => o.id === id) || {};
+const clean = (m) => String(m || "").replace(/^.*?:\s*/, "");
 
 function Splash({ text }) {
   return (
@@ -185,7 +199,7 @@ function Splash({ text }) {
   );
 }
 
-function Login() {
+function LoginPage() {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
@@ -193,19 +207,20 @@ function Login() {
   const go = async () => {
     setBusy(true); setErr("");
     const { error } = await sb.auth.signInWithPassword({ email, password: pw });
-    if (error) setErr("帳號或密碼不對");
-    setBusy(false);
+    if (error) { setErr("帳號或密碼不對"); setBusy(false); }
   };
   return (
     <div className="min-h-screen flex items-center justify-center p-4"
-      style={{ background: C.paper, fontFamily: FONT, color: C.ink }}>
+      style={{ background: C.paper, color: C.ink, fontFamily: FONT }}>
       <style>{CSS}</style>
       <div className="rounded p-6" style={{ background: C.card, border: `1px solid ${C.line}`, width: 320 }}>
         <h1 className="text-lg font-semibold">團體檔期</h1>
-        <p className="text-xs mt-1 mb-4" style={{ color: C.sub }}>KidZania Taipei　內部使用</p>
+        <p className="text-xs mt-1 mb-4" style={{ color: C.sub }}>
+          KidZania Taipei　內部使用，需帳號登入
+        </p>
         <div className="grid gap-2">
           <input value={email} onChange={(e) => setEmail(e.target.value)}
-            placeholder="公司信箱" autoComplete="username" style={inp} />
+            placeholder="公司信箱" autoComplete="username" autoFocus style={inp} />
           <input type="password" value={pw} onChange={(e) => setPw(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && go()}
             placeholder="密碼" autoComplete="current-password" style={inp} />
@@ -237,15 +252,15 @@ function App() {
   const [toast, setToast] = useState(null);
 
   const say = (m) => { setToast(m); setTimeout(() => setToast(null), 3200); };
+  const guest = false;
 
-  /* 登入狀態 */
   useEffect(() => {
     sb.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: sub } = sb.auth.onAuthStateChange((_e, s) => setSession(s));
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  /* 載入 + 即時同步：任何一台裝置改動，其他裝置立刻跟著變 */
+  /* 已登入：讀完整名單，並開啟即時同步 */
   const reload = async () => {
     const { data, error } = await sb.from("bookings").select("*").order("visit_date");
     if (error) { say("讀取失敗：" + error.message); return; }
@@ -262,6 +277,8 @@ function App() {
     return () => { sb.removeChannel(ch); };
   }, [session]);
 
+  const getDay = (date) => dayStats(orders, date);
+
   const addOrder = async (o) => {
     const created = todayISO();
     const rec = {
@@ -273,25 +290,22 @@ function App() {
       到期: addDays(created, holdDays(created, o.日期)),
     };
     const { error } = await sb.from("bookings").insert(toDb(rec));
-    if (error) { say(error.message.replace(/^.*?:\s*/, "")); return; }
-    setFormOpen(false);
-    setPicked(o.日期);
-    setLastNo(rec.單號);
+    if (error) { say(clean(error.message)); return; }
+    setFormOpen(false); setPicked(o.日期); setLastNo(rec.單號);
     await reload();
   };
 
   const patch = async (id, fields) => {
     const { error } = await sb.from("bookings").update(fields).eq("id", id);
-    if (error) { say(error.message.replace(/^.*?:\s*/, "")); return false; }
+    if (error) { say(clean(error.message)); return false; }
     await reload();
     return true;
   };
 
-  const setField = (id, key, val) => patch(id, toDb({ [key]: val, ...pick(orders, id) }));
+  const setField = (id, key, val) => patch(id, toDb({ [key]: val }));
 
   const updateOrder = async (o) => {
-    const ok = await patch(o.id, toDb(o));
-    if (ok) { setEditing(null); say("已更新，名額同步重算"); }
+    if (await patch(o.id, toDb(o))) { setEditing(null); say("已更新，名額同步重算"); }
   };
 
   const move = async (id, status) => {
@@ -310,12 +324,12 @@ function App() {
 
   const remove = async (id) => {
     const { error } = await sb.from("bookings").delete().eq("id", id);
-    if (error) { say(error.message); return; }
+    if (error) { say(clean(error.message)); return; }
     await reload();
   };
 
-  if (session === undefined) return <Splash text="確認登入狀態…" />;
-  if (!session) return <Login />;
+  if (session === undefined) return <Splash text="載入中…" />;
+  if (!session) return <LoginPage />;
 
   const expiredList = orders.filter(isExpired);
 
@@ -331,7 +345,9 @@ function App() {
             <div>
               <h1 className="text-xl font-semibold tracking-tight">團體檔期</h1>
               <p className="text-xs mt-1" style={{ color: C.sub }}>
-                全票上限 {CAP_CHILD} 位・同時容留 {CAP_TOTAL} 位・包場當日不再對外開放
+                {guest
+                  ? "檔期查詢　數字為各場次可售全票數，實際成交以業務回覆為準"
+                  : `全票上限 ${CAP_CHILD} 位・同時容留 ${CAP_TOTAL} 位・包場當日不再對外開放`}
               </p>
             </div>
             <nav className="flex gap-1 items-center">
@@ -357,7 +373,8 @@ function App() {
                   : { border: `1px solid ${C.line}`, color: C.sub }}>
                 {admin ? "結束管理" : "管理"}
               </button>
-              <button onClick={() => sb.auth.signOut()} className="px-2.5 py-1.5 text-xs rounded"
+              <button onClick={() => sb.auth.signOut()}
+                className="px-2.5 py-1.5 text-xs rounded"
                 style={{ border: `1px solid ${C.line}`, color: C.sub }}>登出</button>
             </nav>
           </div>
@@ -389,8 +406,8 @@ function App() {
         )}
         {tab === "檔期" && (
           <CalendarView
-            orders={orders} cursor={cursor} setCursor={setCursor}
-            picked={picked} setPicked={setPicked} admin={admin}
+            getDay={getDay} cursor={cursor} setCursor={setCursor}
+            picked={picked} setPicked={setPicked} admin={admin} guest={guest}
             onNew={(d) => { setPicked(d); setFormOpen(true); }}
           />
         )}
@@ -466,7 +483,7 @@ const CSS = `
 `;
 
 /* ------------------------------------------------------------ 檔期預覽 */
-function CalendarView({ orders, cursor, setCursor, picked, setPicked, onNew, admin }) {
+function CalendarView({ getDay, cursor, setCursor, picked, setPicked, onNew, admin, guest }) {
   const { y, m } = cursor;
   const first = new Date(y, m - 1, 1);
   const days = new Date(y, m, 0).getDate();
@@ -511,13 +528,13 @@ function CalendarView({ orders, cursor, setCursor, picked, setPicked, onNew, adm
         {cells.map((d, i) =>
           d === null
             ? <div key={i} style={{ background: C.paper, minHeight: 76 }} />
-            : <DayCell key={d} date={d} orders={orders}
+            : <DayCell key={d} date={d} s={getDay(d)}
                 selected={picked === d} onClick={() => setPicked(picked === d ? null : d)} />
         )}
       </div>
 
       {picked
-        ? <DayPanel date={picked} orders={orders} onNew={onNew} admin={admin} />
+        ? <DayPanel date={picked} s={getDay(picked)} onNew={onNew} admin={admin} guest={guest} />
         : <p className="text-sm mt-4" style={{ color: C.sub }}>
             點一個日期看細節，或直接登記需求。
           </p>}
@@ -534,8 +551,7 @@ function Legend({ color, label }) {
   );
 }
 
-function DayCell({ date, orders, selected, onClick }) {
-  const s = dayStats(orders, date);
+function DayCell({ date, s, selected, onClick }) {
   const d = parse(date);
   const hol = isHoliday(date);
   const bo = !!s.buyout;
@@ -580,8 +596,7 @@ function Bar({ ratio, left }) {
   );
 }
 
-function DayPanel({ date, orders, onNew, admin }) {
-  const s = dayStats(orders, date);
+function DayPanel({ date, s, onNew, admin, guest }) {
   const d = parse(date);
   const wk = "日一二三四五六"[d.getDay()];
   const hol = isHoliday(date);
@@ -595,18 +610,22 @@ function DayPanel({ date, orders, onNew, admin }) {
             {hol ? "假日" : "平日"}
           </span>
         </h2>
-        <button onClick={() => onNew(date)} className="px-3 py-1.5 text-sm rounded"
-          style={{ background: C.brand, color: "#fff" }}>
-          登記需求
-        </button>
+        {!guest && (
+          <button onClick={() => onNew(date)} className="px-3 py-1.5 text-sm rounded"
+            style={{ background: C.brand, color: "#fff" }}>
+            登記需求
+          </button>
+        )}
       </div>
 
       {s.buyout ? (
         <div className="rounded p-3 text-sm" style={{ background: C.badBg, color: C.badText }}>
           <strong>當日已包場</strong>，不再對外開放，上下半場一律不可售。
-          <div className="mt-1" style={{ color: C.ink }}>
-            {s.buyout.單位}・{s.buyout.場次 === "全" ? "整天" : s.buyout.場次 + "半場"}・{s.buyout.狀態}
-          </div>
+          {!guest && s.buyout.單位 && (
+            <div className="mt-1" style={{ color: C.ink }}>
+              {s.buyout.單位}・{s.buyout.場次 === "全" ? "整天" : s.buyout.場次 + "半場"}・{s.buyout.狀態}
+            </div>
+          )}
         </div>
       ) : (
         <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))" }}>
@@ -652,7 +671,7 @@ function Slot({ name, time, left, note }) {
 /* ------------------------------------------------------------ 需求登記 */
 function RequestForm({ date, orders, editing, onClose, onSubmit }) {
   const [f, setF] = useState(() => editing ? { ...editing } : {
-    單位: "", 客群: "學校", 聯絡人: "", 電話: "",
+    單位: "", 客群: "學校", 業務歸屬: "", 聯絡人: "", 電話: "",
     日期: date || todayISO(), 包場: false, 場次: "上",
     全票: "", 半票: "", 免票: "", 愛心: "",
     餐飲: 0, 劇院: 0, PR廳數: 0, PR方案: "", 備註: "",
@@ -676,6 +695,7 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
 
   const errors = [];
   if (!f.單位.trim()) errors.push("填一下單位名稱");
+  if (!f.業務歸屬) errors.push("選一個業務歸屬，負責窗口會自動帶出");
   if (s.buyout) errors.push(`${f.日期} 已被 ${s.buyout.單位} 包場，這天不能再接單`);
   if (f.包場 && s.eff.length > 0 && !s.buyout) errors.push("這天已有其他訂單，包場需要獨佔，請改期或先處理既有訂單");
   if (!f.包場) {
@@ -715,6 +735,19 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
             </Field>
           </Row>
           <Row>
+            <Field label="業務歸屬" wide>
+              <select value={f.業務歸屬} onChange={(e) => set("業務歸屬", e.target.value)} style={inp}>
+                <option value="">請選擇</option>
+                {Object.keys(ASSIGNMENTS).map((x) => <option key={x}>{x}</option>)}
+              </select>
+            </Field>
+            <Field label="負責窗口">
+              <div className="rounded px-3 py-2 text-sm"
+                style={{ border: `1px solid ${C.line}`, background: C.paper,
+                         color: f.業務歸屬 ? C.brand : C.sub, fontWeight: f.業務歸屬 ? 600 : 400 }}>
+                {ownerOf(f.業務歸屬) || "選了業務歸屬就會帶出"}
+              </div>
+            </Field>
             <Field label="客群">
               <select value={f.客群} onChange={(e) => set("客群", e.target.value)} style={inp}>
                 {SEGMENTS.map((x) => <option key={x}>{x}</option>)}
@@ -827,7 +860,8 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
           <button onClick={onClose} className="px-4 py-2 text-sm rounded flex-1"
             style={{ border: `1px solid ${C.line}` }}>取消</button>
           <button disabled={errors.length > 0}
-            onClick={() => onSubmit({ ...f, 全票: +f.全票 || 0, 半票: +f.半票 || 0, 免票: +f.免票 || 0, 愛心: +f.愛心 || 0, 餐飲: +f.餐飲 || 0 })}
+            onClick={() => onSubmit({ ...f, 負責窗口: ownerOf(f.業務歸屬),
+              全票: +f.全票 || 0, 半票: +f.半票 || 0, 免票: +f.免票 || 0, 愛心: +f.愛心 || 0, 餐飲: +f.餐飲 || 0 })}
             className="px-4 py-2 text-sm rounded flex-1"
             style={errors.length
               ? { background: C.line, color: C.sub }
@@ -921,6 +955,10 @@ function TaskCard({ o, onMove, onRenew, onRemove, onEdit, onField }) {
             {o.單號 || "—"}・{o.日期}　{o.包場 ? "包場" : o.場次 === "全" ? "整天" : o.場次 + "半場"}
             ・全票 {o.全票}・共 {headcount(o)} 位
           </div>
+          <div className="text-xs mt-0.5" style={{ color: C.sub }}>
+            {o.業務歸屬 && <span>{o.業務歸屬}　</span>}
+            {o.負責窗口 && <span style={{ color: C.brand, fontWeight: 600 }}>{o.負責窗口}</span>}
+          </div>
           {o.聯絡人 && <div className="text-xs mt-0.5" style={{ color: C.sub }}>
             {o.聯絡人} {o.電話}
           </div>}
@@ -980,7 +1018,9 @@ function ExportView({ orders, say }) {
 
   const rows = orders.map((o) => ({
     單號: o.單號 || "",
-    客戶ID: o.客戶ID, 單位: o.單位, 客群: o.客群, 聯絡人: o.聯絡人, 電話: o.電話,
+    客戶ID: o.客戶ID, 單位: o.單位,
+    業務歸屬: o.業務歸屬 || "", 負責窗口: o.負責窗口 || "",
+    客群: o.客群, 聯絡人: o.聯絡人, 電話: o.電話,
     預定日期: o.日期, 日別: isHoliday(o.日期) ? "假日" : "平日",
     場次: o.包場 ? "包場-" + (o.場次 === "全" ? "整天" : o.場次 + "半場")
                  : (o.場次 === "全" ? "整天" : o.場次 + "半場"),
