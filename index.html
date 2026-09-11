@@ -126,7 +126,9 @@ function dayStats(orders, dateStr, excludeId) {
   const eff = orders.filter(
     (o) => o.日期 === dateStr && o.id !== excludeId && occupies(o)
   );
-  const buyout = eff.find((o) => o.包場) || null;
+  const amLock = eff.find((o) => o.包場 && (o.場次 === "上" || o.場次 === "全")) || null;
+  const pmLock = eff.find((o) => o.包場 && (o.場次 === "下" || o.場次 === "全")) || null;
+  const buyout = amLock && pmLock ? amLock : null;   // 兩場都鎖才算整天包場
   const sum = (slots, key) =>
     eff.filter((o) => slots.includes(o.場次))
        .reduce((a, o) => a + (key === "child" ? +o.全票 || 0 : headcount(o)), 0);
@@ -136,15 +138,28 @@ function dayStats(orders, dateStr, excludeId) {
   const left = (child, all) =>
     Math.max(0, Math.min(CAP_CHILD - child, CAP_TOTAL - all));
 
-  const am = left(amChild, amAll), pm = left(pmChild, pmAll);
+  /* 平日不清場，上半場的人可能還在館內，所以整天共用同一個名額池。
+     假日強迫清場，上下半場各自獨立計算。 */
+  const pooled = !isHoliday(dateStr);
+  const dayChild = eff.reduce((a, o) => a + (+o.全票 || 0), 0);
+  const dayAll = eff.reduce((a, o) => a + headcount(o), 0);
+
+  const rest = pooled ? left(dayChild, dayAll) : null;
+  const am = pooled ? rest : left(amChild, amAll);
+  const pm = pooled ? rest : left(pmChild, pmAll);
+  const ratio = Math.min(1, dayChild / CAP_CHILD);
+
   return {
-    buyout, eff,
-    am, pm, full: Math.min(am, pm),
+    buyout, amLock, pmLock, eff, pooled,
+    am: amLock ? 0 : am,
+    pm: pmLock ? 0 : pm,
+    full: amLock || pmLock ? 0 : (pooled ? rest : Math.min(am, pm)),
     amChild, pmChild, amAll, pmAll,
     amOther: amAll - amChild, pmOther: pmAll - pmChild,
-    peak: Math.max(amAll, pmAll),
-    amRatio: Math.min(1, amChild / CAP_CHILD),
-    pmRatio: Math.min(1, pmChild / CAP_CHILD),
+    dayChild, dayAll,
+    peak: pooled ? dayAll : Math.max(amAll, pmAll),
+    amRatio: pooled ? ratio : Math.min(1, amChild / CAP_CHILD),
+    pmRatio: pooled ? ratio : Math.min(1, pmChild / CAP_CHILD),
   };
 }
 
@@ -571,7 +586,7 @@ function Legend({ color, label }) {
 function DayCell({ date, s, selected, onClick }) {
   const d = parse(date);
   const hol = isHoliday(date);
-  const bo = !!s.buyout;
+  const bo = !!(s.amLock && s.pmLock);
 
   return (
     <button onClick={onClick} className="text-left p-1.5 flex flex-col gap-1"
@@ -588,10 +603,12 @@ function DayCell({ date, s, selected, onClick }) {
         <span className="text-xs font-semibold mt-1" style={{ color: C.badText }}>包場</span>
       ) : (
         <>
-          <Bar ratio={s.amRatio} left={s.am} />
-          <Bar ratio={s.pmRatio} left={s.pm} />
-          <span className="text-xs tnum mt-auto" style={{ color: TONE[toneOf(s.full)].t }}>
-            {s.full <= 0 ? "額滿" : s.peak > 0 ? `已訂 ${s.peak}` : ""}
+          <Bar ratio={s.amLock ? 1 : s.amRatio} left={s.amLock ? 0 : s.am} />
+          <Bar ratio={s.pmLock ? 1 : s.pmRatio} left={s.pmLock ? 0 : s.pm} />
+          <span className="text-xs tnum mt-auto"
+            style={{ color: s.amLock || s.pmLock ? C.badText : TONE[toneOf(s.full)].t }}>
+            {s.amLock ? "上包場" : s.pmLock ? "下包場"
+              : s.full <= 0 ? "額滿" : s.peak > 0 ? `已訂 ${s.peak}` : ""}
           </span>
         </>
       )}
@@ -635,7 +652,7 @@ function DayPanel({ date, s, onNew, admin, guest }) {
         )}
       </div>
 
-      {s.buyout ? (
+      {s.amLock && s.pmLock ? (
         <div className="rounded p-3 text-sm" style={{ background: C.badBg, color: C.badText }}>
           <strong>當日已包場</strong>，不再對外開放，上下半場一律不可售。
           {!guest && s.buyout.單位 && (
@@ -648,19 +665,27 @@ function DayPanel({ date, s, onNew, admin, guest }) {
         <>
         <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))" }}>
           <Slot name="上半場" time={sessionTime(date, "上")} left={s.am}
-            booked={s.amAll} child={s.amChild} other={s.amOther} />
+            booked={s.amAll} child={s.amChild} other={s.amOther}
+            lock={s.amLock} guest={guest} />
           <Slot name="下半場" time={sessionTime(date, "下")} left={s.pm}
-            booked={s.pmAll} child={s.pmChild} other={s.pmOther} />
-          {!hol && (
+            booked={s.pmAll} child={s.pmChild} other={s.pmOther}
+            lock={s.pmLock} guest={guest} />
+          {!hol && !s.amLock && !s.pmLock && (
             <Slot name="整天" time={sessionTime(date, "全")} left={s.full}
-              booked={s.peak} child={Math.max(s.amChild, s.pmChild)}
-              other={s.peak - Math.max(s.amChild, s.pmChild)}
+              booked={s.dayAll} child={s.dayChild} other={s.dayAll - s.dayChild}
               note="同時佔用上下半場" />
           )}
         </div>
-        {hol && (
-          <p className="text-xs mt-2" style={{ color: C.sub }}>
-            假日兩場之間強迫清場，整天僅開放包場。上下半場各自售滿才是當日上限。
+        <p className="text-xs mt-2" style={{ color: C.sub }}>
+          {hol
+            ? "假日兩場之間強迫清場，整天僅開放包場。上下半場各自售滿才是當日上限。"
+            : `平日不清場，上下半場共用名額池。當日已訂 ${s.dayAll} 人（全票 ${s.dayChild}），整日上限 ${CAP_TOTAL} 人、全票 ${CAP_CHILD}。`}
+        </p>
+        {!hol && s.dayAll > 0 && (
+          <p className="text-xs mt-1 tnum" style={{ color: C.sub }}>
+            團體保守值取上半場不離場計算。若上半場全數離場，下半場現場最多可再收
+            <span style={{ color: C.brand, fontWeight: 600 }}>{" "}{Math.max(0, Math.min(CAP_CHILD - s.pmChild, CAP_TOTAL - s.pmAll))}{" "}</span>
+            人。
           </p>
         )}
         </>
@@ -687,8 +712,19 @@ function DayPanel({ date, s, onNew, admin, guest }) {
   );
 }
 
-function Slot({ name, time, left, booked, child, other, note }) {
+function Slot({ name, time, left, booked, child, other, note, lock, guest }) {
   const tone = TONE[toneOf(left)];
+  if (lock) {
+    return (
+      <div className="rounded p-3" style={{ background: C.badBg }}>
+        <div className="text-xs" style={{ color: C.badText }}>{name}　{time}</div>
+        <div className="text-xl font-semibold mt-1" style={{ color: C.badText }}>已包場</div>
+        <div className="text-xs mt-1" style={{ color: C.badText, opacity: .9 }}>
+          {guest ? lock.單號 : lock.單位}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="rounded p-3" style={{ background: tone.b }}>
       <div className="text-xs" style={{ color: tone.t }}>{name}　{time}</div>
@@ -742,8 +778,12 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
   if (!f.包場 && f.場次 === "全" && isHoliday(f.日期))
     errors.push("假日強迫清場，整天僅開放包場。請改選上半場或下半場");
   if (!f.業務歸屬) errors.push("選一個業務歸屬，負責窗口會自動帶出");
-  if (s.buyout) errors.push(`${f.日期} 已被 ${s.buyout.單位} 包場，這天不能再接單`);
-  if (f.包場 && s.eff.length > 0 && !s.buyout) errors.push("這天已有其他訂單，包場需要獨佔，請改期或先處理既有訂單");
+  const overlaps = (a, b) => a === "全" || b === "全" || a === b;
+  const lock = f.場次 === "上" ? s.amLock : f.場次 === "下" ? s.pmLock : (s.amLock || s.pmLock);
+  if (lock) errors.push(`這個時段已被 ${lock.單位 || lock.單號} 包場，請改場次或改期`);
+  const clash = s.eff.filter((o) => overlaps(o.場次, f.場次));
+  if (f.包場 && clash.length > 0 && !lock)
+    errors.push("這個時段已有其他訂單，包場需要獨佔，請改期或先處理既有訂單");
   if (!f.包場) {
     if (child <= 0) errors.push("全票人數要大於 0");
     if (child > slotLeft) errors.push(`全票超出可售名額，這個場次只剩 ${slotLeft} 位`);
