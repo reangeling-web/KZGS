@@ -620,15 +620,18 @@ function DayPanel({ date, s, onNew, admin, guest }) {
           )}
         </div>
       ) : (
+        <>
         <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))" }}>
           <Slot name="上半場" time={sessionTime(date, "上")} left={s.am}
             booked={s.amAll} child={s.amChild} other={s.amOther} />
           <Slot name="下半場" time={sessionTime(date, "下")} left={s.pm}
             booked={s.pmAll} child={s.pmChild} other={s.pmOther} />
-          <Slot name="整天" time={sessionTime(date, "全")} left={s.full}
-            booked={s.peak} child={Math.max(s.amChild, s.pmChild)}
-            other={s.peak - Math.max(s.amChild, s.pmChild)}
-            note="同時佔用上下半場" />
+          {!hol && (
+            <Slot name="整天" time={sessionTime(date, "全")} left={s.full}
+              booked={s.peak} child={Math.max(s.amChild, s.pmChild)}
+              other={s.peak - Math.max(s.amChild, s.pmChild)}
+              note="同時佔用上下半場" />
+          )}
         </div>
       )}
 
@@ -682,7 +685,11 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
     全票: "", 半票: "", 免票: "", 愛心: "",
     餐飲: 0, 劇院: 0, PR廳數: 0, PR方案: "", 備註: "",
   });
-  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const set = (k, v) => setF((p) => {
+    const n = { ...p, [k]: v };
+    if (!n.包場 && n.場次 === "全" && isHoliday(n.日期)) n.場次 = "上";
+    return n;
+  });
 
   /** 包場＝場域內所有可獨立販售的品項一併保留，先幫使用者勾好，仍可調整 */
   const setBuyout = (on) =>
@@ -701,6 +708,8 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
 
   const errors = [];
   if (!f.單位.trim()) errors.push("填一下單位名稱");
+  if (!f.包場 && f.場次 === "全" && isHoliday(f.日期))
+    errors.push("假日強迫清場，整天僅開放包場。請改選上半場或下半場");
   if (!f.業務歸屬) errors.push("選一個業務歸屬，負責窗口會自動帶出");
   if (s.buyout) errors.push(`${f.日期} 已被 ${s.buyout.單位} 包場，這天不能再接單`);
   if (f.包場 && s.eff.length > 0 && !s.buyout) errors.push("這天已有其他訂單，包場需要獨佔，請改期或先處理既有訂單");
@@ -780,7 +789,7 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
                 <select value={f.場次} onChange={(e) => set("場次", e.target.value)} style={inp}>
                   <option value="上">上半場</option>
                   <option value="下">下半場</option>
-                  <option value="全">整天</option>
+                  {(f.包場 || !isHoliday(f.日期)) && <option value="全">整天</option>}
                 </select>
               </Field>
             </Row>
