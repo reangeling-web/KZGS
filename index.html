@@ -68,13 +68,9 @@ const FLOW = ["檔期暫留", "已報價", "已確認", "行前作業", "已到�
 const HOLD_STATES = ["檔期暫留", "已報價", "已確認", "行前作業"];
 const EXPIRABLE = ["檔期暫留", "已報價"];
 
-// 2027 放假日暫定，公告後直接改這裡
-const HOLIDAYS = new Set([
-  "2027-01-01", "2027-02-05", "2027-02-06", "2027-02-07", "2027-02-08",
-  "2027-02-09", "2027-02-10", "2027-02-28", "2027-03-01", "2027-04-04",
-  "2027-04-05", "2027-05-01", "2027-06-09", "2027-09-15", "2027-10-10",
-  "2026-12-25",
-]);
+/** 平假日定義由「行事曆」分頁維護，存在資料庫。沒定義的日期才退回週末判斷。 */
+let CAL = {};
+const setCalendarMap = (m) => { CAL = m; };
 
 /* ------------------------------------------------------------------ 工具 */
 const pad = (n) => String(n).padStart(2, "0");
@@ -83,9 +79,12 @@ const parse = (s) => { const [y, m, d] = s.split("-").map(Number); return new Da
 const todayISO = () => iso(new Date());
 
 function isHoliday(dateStr) {
+  if (CAL[dateStr]) return CAL[dateStr] === "假日";
   const d = parse(dateStr);
-  return d.getDay() === 0 || d.getDay() === 6 || HOLIDAYS.has(dateStr);
+  return d.getDay() === 0 || d.getDay() === 6;
 }
+const calNote = (dateStr) => (CAL_NOTE[dateStr] || "");
+let CAL_NOTE = {};
 /** 平日 09:00-20:00、假日 10:00-21:00，各拆成 5H ／ 1H 清場 ／ 5H */
 function sessionTime(dateStr, slot) {
   const hol = isHoliday(dateStr);
@@ -270,8 +269,17 @@ function App() {
 
   const say = (m) => { setToast(m); setTimeout(() => setToast(null), 3200); };
   const [guestMode, setGuestMode] = useState(false);
+  const [cal, setCal] = useState([]);
   const guest = !session;
   const admin = !guest;
+
+  const loadCal = async () => {
+    const { data } = await sb.from("calendar_days").select("*").order("day");
+    const m = {}, n = {};
+    for (const r of data || []) { m[r.day] = r.kind; n[r.day] = r.note || ""; }
+    setCalendarMap(m); CAL_NOTE = n; setCal(data || []);
+  };
+  useEffect(() => { loadCal(); }, []);
 
   useEffect(() => {
     sb.auth.getSession().then(({ data }) => setSession(data.session));
@@ -350,6 +358,20 @@ function App() {
       say("保留期已重新計算");
   };
 
+  const saveCal = async (rows) => {
+    const { error } = await sb.from("calendar_days").upsert(rows, { onConflict: "day" });
+    if (error) { say(clean(error.message)); return false; }
+    await loadCal();
+    say(`已更新 ${rows.length} 個日期`);
+    return true;
+  };
+
+  const delCal = async (day) => {
+    const { error } = await sb.from("calendar_days").delete().eq("day", day);
+    if (error) { say(clean(error.message)); return; }
+    await loadCal();
+  };
+
   const remove = async (id) => {
     const { error } = await sb.from("bookings").delete().eq("id", id);
     if (error) { say(clean(error.message)); return; }
@@ -379,7 +401,7 @@ function App() {
               </p>
             </div>
             <nav className="flex gap-1 items-center">
-              {(guest ? ["檔期"] : ["檔期", "任務", "匯出"]).map((t) => (
+              {(guest ? ["檔期"] : ["檔期", "任務", "匯出", "行事曆"]).map((t) => (
                 <button key={t} onClick={() => setTab(t)} className="px-3 py-1.5 text-sm rounded"
                   style={tab === t
                     ? { background: C.brand, color: "#fff" }
@@ -441,6 +463,9 @@ function App() {
           <TaskView orders={orders} onMove={move} onRenew={renew} onRemove={remove} onEdit={setEditing} onField={setField} />
         )}
         {tab === "匯出" && admin && <ExportView orders={orders} say={say} />}
+        {tab === "行事曆" && admin && (
+          <CalendarAdmin cal={cal} onSave={saveCal} onDelete={delCal} say={say} />
+        )}
 
         {(formOpen || editing) && (
           <RequestForm
@@ -1023,6 +1048,158 @@ function TaskCard({ o, onMove, onRenew, onRemove, onEdit, onField }) {
           style={{ color: C.badText }}>刪除</button>
       </div>
     </li>
+  );
+}
+
+/* ------------------------------------------------------------- 行事曆維護 */
+/** 把上傳或貼上的資料整理成 {day, note, kind}，看不懂的列直接丟掉 */
+function parseCalendar(raw) {
+  const norm = (v) => {
+    if (v instanceof Date) return iso(v);
+    if (typeof v === "number")            // Excel 序列日期
+      return iso(new Date(Date.UTC(1899, 11, 30 + v)));
+    const t = String(v || "").trim().replace(/[./]/g, "-");
+    const m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    return m ? `${m[1]}-${pad(+m[2])}-${pad(+m[3])}` : "";
+  };
+  const kindOf = (v) => {
+    const t = String(v || "").trim();
+    if (/假/.test(t) && !/^平/.test(t)) return "假日";
+    if (/平|工作|上班/.test(t)) return "平日";
+    return "";
+  };
+  const out = [], seen = new Set();
+  for (const r of raw) {
+    const day = norm(r[0]), kind = kindOf(r[2]);
+    if (!day || !kind || seen.has(day)) continue;
+    seen.add(day);
+    out.push({ day, note: String(r[1] || "").trim(), kind });
+  }
+  return out;
+}
+
+function CalendarAdmin({ cal, onSave, onDelete, say }) {
+  const [preview, setPreview] = useState(null);
+  const [text, setText] = useState("");
+  const file = useRef(null);
+
+  const takeFile = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try {
+      const buf = await f.arrayBuffer();
+      const wb = XLSX.read(buf, { cellDates: true });
+      const sh = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sh, { header: 1, raw: true });
+      const parsed = parseCalendar(rows);
+      parsed.length ? setPreview(parsed) : say("讀不到可用的資料，請確認三欄順序為 日期／說明／平假日");
+    } catch (err) {
+      say("檔案讀取失敗，請改用貼上");
+    }
+    e.target.value = "";
+  };
+
+  const takeText = () => {
+    const rows = text.trim().split(/\r?\n/).map((l) => l.split(/\t|,/));
+    const parsed = parseCalendar(rows);
+    parsed.length ? setPreview(parsed) : say("讀不到可用的資料，一行一天，用 Tab 或逗號分隔");
+  };
+
+  const commit = async () => {
+    if (await onSave(preview)) { setPreview(null); setText(""); }
+  };
+
+  const holi = cal.filter((r) => r.kind === "假日").length;
+
+  return (
+    <>
+      <div className="rounded p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <h2 className="font-semibold">匯入平假日定義</h2>
+        <p className="text-xs mt-1 mb-3" style={{ color: C.sub }}>
+          三欄，順序固定：<span className="tnum">日期</span>／說明／平假日。
+          日期可用 2027-01-01 或 2027/1/1；第三欄寫「平日」或「假日」。
+          第一列是標題也沒關係，讀不懂的列會自動略過。同一天重複匯入會覆蓋舊的。
+        </p>
+
+        <div className="flex gap-2 flex-wrap items-center">
+          <button onClick={() => file.current?.click()}
+            className="px-3 py-2 text-sm rounded" style={{ background: C.brand, color: "#fff" }}>
+            上傳 Excel 或 CSV
+          </button>
+          <input ref={file} type="file" accept=".xlsx,.xls,.csv" onChange={takeFile} className="hidden" />
+          <span className="text-xs" style={{ color: C.sub }}>或直接貼上 ↓</span>
+        </div>
+
+        <textarea rows={4} value={text} onChange={(e) => setText(e.target.value)}
+          placeholder={"2027-01-01\t元旦\t假日\n2027-01-02\t\t假日\n2027-01-04\t\t平日"}
+          style={{ ...inp, marginTop: 8, fontFamily: "inherit" }} />
+        <button onClick={takeText} disabled={!text.trim()}
+          className="mt-2 px-3 py-2 text-sm rounded"
+          style={text.trim() ? { border: `1px solid ${C.line}` } : { background: C.line, color: C.sub }}>
+          讀取貼上的內容
+        </button>
+      </div>
+
+      {preview && (
+        <div className="rounded p-4 mb-4" style={{ background: C.card, border: `2px solid ${C.brand}` }}>
+          <div className="flex items-baseline justify-between flex-wrap gap-2">
+            <p className="font-medium tnum">
+              讀到 {preview.length} 個日期
+              <span className="text-xs font-normal ml-2" style={{ color: C.sub }}>
+                假日 {preview.filter((r) => r.kind === "假日").length}・
+                平日 {preview.filter((r) => r.kind === "平日").length}
+              </span>
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => setPreview(null)} className="px-3 py-1.5 text-sm rounded"
+                style={{ border: `1px solid ${C.line}` }}>取消</button>
+              <button onClick={commit} className="px-3 py-1.5 text-sm rounded"
+                style={{ background: C.brand, color: "#fff" }}>確認寫入</button>
+            </div>
+          </div>
+          <ul className="mt-3 text-xs grid gap-1" style={{ maxHeight: 200, overflowY: "auto" }}>
+            {preview.map((r) => (
+              <li key={r.day} className="tnum flex gap-3">
+                <span style={{ minWidth: "6rem" }}>{r.day}</span>
+                <span style={{ color: r.kind === "假日" ? C.brand : C.sub, minWidth: "3rem" }}>{r.kind}</span>
+                <span style={{ color: C.sub }}>{r.note}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="rounded" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <div className="px-4 py-3 flex items-baseline justify-between"
+          style={{ borderBottom: `1px solid ${C.line}` }}>
+          <h2 className="font-semibold">目前的定義</h2>
+          <span className="text-xs tnum" style={{ color: C.sub }}>
+            共 {cal.length} 天・假日 {holi}
+          </span>
+        </div>
+        {cal.length === 0 ? (
+          <p className="p-4 text-sm" style={{ color: C.sub }}>
+            還沒有任何定義。沒定義的日期一律用週末判斷：週六日算假日，週一到五算平日。
+          </p>
+        ) : (
+          <ul className="text-sm">
+            {cal.map((r) => (
+              <li key={r.day} className="px-4 py-2 flex items-center gap-3"
+                style={{ borderBottom: `1px solid ${C.line}` }}>
+                <span className="tnum" style={{ minWidth: "6.5rem" }}>{r.day}</span>
+                <span className="text-xs px-2 py-0.5 rounded"
+                  style={r.kind === "假日"
+                    ? { background: C.badBg, color: C.badText }
+                    : { background: C.paper, color: C.sub }}>{r.kind}</span>
+                <span className="text-xs" style={{ color: C.sub }}>{r.note}</span>
+                <button onClick={() => onDelete(r.day)}
+                  className="ml-auto px-2 py-1 text-xs rounded" style={{ color: C.badText }}>刪除</button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </>
   );
 }
 
