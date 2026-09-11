@@ -658,6 +658,12 @@ function DayPanel({ date, s, onNew, admin, guest }) {
               note="同時佔用上下半場" />
           )}
         </div>
+        {hol && (
+          <p className="text-xs mt-2" style={{ color: C.sub }}>
+            假日兩場之間強迫清場，整天僅開放包場。上下半場各自售滿才是當日上限。
+          </p>
+        )}
+        </>
       )}
 
       {s.eff.length > 0 && (
