@@ -192,6 +192,19 @@ const toDb = (o) => {
 
 const clean = (m) => String(m || "").replace(/^.*?:\s*/, "");
 
+/** 訪客看到的每日狀況：只有數字，沒有任何一筆原始資料 */
+const guestStats = (row) => {
+  if (!row) return { buyout: null, eff: [], am: CAP_CHILD, pm: CAP_CHILD,
+                     full: CAP_CHILD, amRatio: 0, pmRatio: 0 };
+  const am = row.am_left, pm = row.pm_left;
+  return {
+    buyout: row.buyout ? {} : null, eff: [],
+    am, pm, full: Math.min(am, pm),
+    amRatio: Math.min(1, (CAP_CHILD - am) / CAP_CHILD),
+    pmRatio: Math.min(1, (CAP_CHILD - pm) / CAP_CHILD),
+  };
+};
+
 function Splash({ text }) {
   return (
     <div className="min-h-screen flex items-center justify-center"
@@ -199,7 +212,7 @@ function Splash({ text }) {
   );
 }
 
-function LoginPage() {
+function LoginPage({ onGuest }) {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
@@ -231,6 +244,14 @@ function LoginPage() {
           style={{ background: C.brand, color: "#fff" }}>
           {busy ? "登入中…" : "登入"}
         </button>
+        <button onClick={onGuest}
+          className="w-full mt-2 px-3 py-2 text-sm rounded"
+          style={{ border: `1px solid ${C.line}`, color: C.sub }}>
+          只看檔期
+        </button>
+        <p className="text-xs mt-3" style={{ color: C.sub }}>
+          只看檔期為唯讀，看得到剩餘名額，看不到預約單位，也不能登記。
+        </p>
       </div>
     </div>
   );
@@ -252,13 +273,26 @@ function App() {
   const [toast, setToast] = useState(null);
 
   const say = (m) => { setToast(m); setTimeout(() => setToast(null), 3200); };
-  const guest = false;
+  const [guestMode, setGuestMode] = useState(false);
+  const [avail, setAvail] = useState({});
+  const guest = !session;
 
   useEffect(() => {
     sb.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: sub } = sb.auth.onAuthStateChange((_e, s) => setSession(s));
     return () => sub.subscription.unsubscribe();
   }, []);
+
+  /* 訪客：只讀彙總檢視，讀不到任何一筆原始資料 */
+  useEffect(() => {
+    if (!guestMode || session) return;
+    (async () => {
+      const { data } = await sb.from("availability").select("*");
+      const m = {};
+      for (const r of data || []) m[r.visit_date] = r;
+      setAvail(m); setOrders([]); setAdmin(false); setLoaded(true);
+    })();
+  }, [guestMode, session]);
 
   /* 已登入：讀完整名單，並開啟即時同步 */
   const reload = async () => {
@@ -277,7 +311,7 @@ function App() {
     return () => { sb.removeChannel(ch); };
   }, [session]);
 
-  const getDay = (date) => dayStats(orders, date);
+  const getDay = (date) => (guest ? guestStats(avail[date]) : dayStats(orders, date));
 
   const addOrder = async (o) => {
     const created = todayISO();
@@ -329,7 +363,7 @@ function App() {
   };
 
   if (session === undefined) return <Splash text="載入中…" />;
-  if (!session) return <LoginPage />;
+  if (!session && !guestMode) return <LoginPage onGuest={() => setGuestMode(true)} />;
 
   const expiredList = orders.filter(isExpired);
 
@@ -346,7 +380,7 @@ function App() {
               <h1 className="text-xl font-semibold tracking-tight">團體檔期</h1>
               <p className="text-xs mt-1" style={{ color: C.sub }}>
                 {guest
-                  ? "檔期查詢　數字為各場次可售全票數，實際成交以業務回覆為準"
+                  ? "唯讀檢視　數字為各場次可售全票數，實際成交以業務回覆為準"
                   : `全票上限 ${CAP_CHILD} 位・同時容留 ${CAP_TOTAL} 位・包場當日不再對外開放`}
               </p>
             </div>
@@ -365,17 +399,25 @@ function App() {
                   )}
                 </button>
               ))}
-              <button
-                onClick={() => { if (admin) { setAdmin(false); setTab("檔期"); } else setGate(true); }}
-                className="ml-1 px-2.5 py-1.5 text-xs rounded"
-                style={admin
-                  ? { border: `1px solid ${C.brand}`, color: C.brand }
-                  : { border: `1px solid ${C.line}`, color: C.sub }}>
-                {admin ? "結束管理" : "管理"}
-              </button>
-              <button onClick={() => sb.auth.signOut()}
-                className="px-2.5 py-1.5 text-xs rounded"
-                style={{ border: `1px solid ${C.line}`, color: C.sub }}>登出</button>
+              {guest ? (
+                <button onClick={() => { setGuestMode(false); setLoaded(false); }}
+                  className="ml-1 px-3 py-1.5 text-sm rounded"
+                  style={{ background: C.brand, color: "#fff" }}>登入</button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => { if (admin) { setAdmin(false); setTab("檔期"); } else setGate(true); }}
+                    className="ml-1 px-2.5 py-1.5 text-xs rounded"
+                    style={admin
+                      ? { border: `1px solid ${C.brand}`, color: C.brand }
+                      : { border: `1px solid ${C.line}`, color: C.sub }}>
+                    {admin ? "結束管理" : "管理"}
+                  </button>
+                  <button onClick={() => sb.auth.signOut()}
+                    className="px-2.5 py-1.5 text-xs rounded"
+                    style={{ border: `1px solid ${C.line}`, color: C.sub }}>登出</button>
+                </>
+              )}
             </nav>
           </div>
         </div>
