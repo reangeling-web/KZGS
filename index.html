@@ -86,11 +86,12 @@ function isHoliday(dateStr) {
   const d = parse(dateStr);
   return d.getDay() === 0 || d.getDay() === 6 || HOLIDAYS.has(dateStr);
 }
+/** 平日 09:00-20:00、假日 10:00-21:00，各拆成 5H ／ 1H 清場 ／ 5H */
 function sessionTime(dateStr, slot) {
   const hol = isHoliday(dateStr);
-  if (slot === "上") return hol ? "10:00–15:00" : "09:00–15:00";
-  if (slot === "下") return "16:00–22:00";
-  return hol ? "10:00–22:00" : "09:00–22:00";
+  if (slot === "上") return hol ? "10:00–15:00" : "09:00–14:00";
+  if (slot === "下") return hol ? "16:00–21:00" : "15:00–20:00";
+  return hol ? "10:00–21:00" : "09:00–20:00";
 }
 function daysBetween(a, b) {
   return Math.round((parse(b) - parse(a)) / 86400000);
@@ -140,7 +141,9 @@ function dayStats(orders, dateStr, excludeId) {
   return {
     buyout, eff,
     am, pm, full: Math.min(am, pm),
-    amUse: amChild, pmUse: pmChild,
+    amChild, pmChild, amAll, pmAll,
+    amOther: amAll - amChild, pmOther: pmAll - pmChild,
+    peak: Math.max(amAll, pmAll),
     amRatio: Math.min(1, amChild / CAP_CHILD),
     pmRatio: Math.min(1, pmChild / CAP_CHILD),
   };
@@ -192,18 +195,13 @@ const toDb = (o) => {
 
 const clean = (m) => String(m || "").replace(/^.*?:\s*/, "");
 
-/** 訪客看到的每日狀況：只有數字，沒有任何一筆原始資料 */
-const guestStats = (row) => {
-  if (!row) return { buyout: null, eff: [], am: CAP_CHILD, pm: CAP_CHILD,
-                     full: CAP_CHILD, amRatio: 0, pmRatio: 0 };
-  const am = row.am_left, pm = row.pm_left;
-  return {
-    buyout: row.buyout ? {} : null, eff: [],
-    am, pm, full: Math.min(am, pm),
-    amRatio: Math.min(1, (CAP_CHILD - am) / CAP_CHILD),
-    pmRatio: Math.min(1, (CAP_CHILD - pm) / CAP_CHILD),
-  };
-};
+/** 預覽權限拿到的是去識別化的逐筆資料：只有單號與人數，沒有單位與聯絡方式 */
+const toGuest = (r) => ({
+  id: r.order_no, 單號: r.order_no, 單位: "",
+  日期: r.visit_date, 場次: r.slot, 包場: r.buyout,
+  全票: r.full_ticket, 半票: r.other_ticket, 免票: 0, 愛心: 0,
+  狀態: "已確認", 到期: null,
+});
 
 function Splash({ text }) {
   return (
@@ -267,15 +265,13 @@ function App() {
   const [picked, setPicked] = useState(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [admin, setAdmin] = useState(false);
-  const [gate, setGate] = useState(false);
   const [lastNo, setLastNo] = useState(null);
   const [toast, setToast] = useState(null);
 
   const say = (m) => { setToast(m); setTimeout(() => setToast(null), 3200); };
   const [guestMode, setGuestMode] = useState(false);
-  const [avail, setAvail] = useState({});
   const guest = !session;
+  const admin = !guest;
 
   useEffect(() => {
     sb.auth.getSession().then(({ data }) => setSession(data.session));
@@ -288,9 +284,7 @@ function App() {
     if (!guestMode || session) return;
     (async () => {
       const { data } = await sb.from("availability").select("*");
-      const m = {};
-      for (const r of data || []) m[r.visit_date] = r;
-      setAvail(m); setOrders([]); setAdmin(false); setLoaded(true);
+      setOrders((data || []).map(toGuest)); setLoaded(true);
     })();
   }, [guestMode, session]);
 
@@ -311,7 +305,7 @@ function App() {
     return () => { sb.removeChannel(ch); };
   }, [session]);
 
-  const getDay = (date) => (guest ? guestStats(avail[date]) : dayStats(orders, date));
+  const getDay = (date) => dayStats(orders, date);
 
   const addOrder = async (o) => {
     const created = todayISO();
@@ -380,12 +374,12 @@ function App() {
               <h1 className="text-xl font-semibold tracking-tight">團體檔期</h1>
               <p className="text-xs mt-1" style={{ color: C.sub }}>
                 {guest
-                  ? "唯讀檢視　數字為各場次可售全票數，實際成交以業務回覆為準"
+                  ? "預覽權限　可查看檔期與各團人數，不顯示預約單位"
                   : `全票上限 ${CAP_CHILD} 位・同時容留 ${CAP_TOTAL} 位・包場當日不再對外開放`}
               </p>
             </div>
             <nav className="flex gap-1 items-center">
-              {(admin ? ["檔期", "任務", "匯出"] : ["檔期"]).map((t) => (
+              {(guest ? ["檔期"] : ["檔期", "任務", "匯出"]).map((t) => (
                 <button key={t} onClick={() => setTab(t)} className="px-3 py-1.5 text-sm rounded"
                   style={tab === t
                     ? { background: C.brand, color: "#fff" }
@@ -404,19 +398,9 @@ function App() {
                   className="ml-1 px-3 py-1.5 text-sm rounded"
                   style={{ background: C.brand, color: "#fff" }}>登入</button>
               ) : (
-                <>
-                  <button
-                    onClick={() => { if (admin) { setAdmin(false); setTab("檔期"); } else setGate(true); }}
-                    className="ml-1 px-2.5 py-1.5 text-xs rounded"
-                    style={admin
-                      ? { border: `1px solid ${C.brand}`, color: C.brand }
-                      : { border: `1px solid ${C.line}`, color: C.sub }}>
-                    {admin ? "結束管理" : "管理"}
-                  </button>
-                  <button onClick={() => sb.auth.signOut()}
-                    className="px-2.5 py-1.5 text-xs rounded"
-                    style={{ border: `1px solid ${C.line}`, color: C.sub }}>登出</button>
-                </>
+                <button onClick={() => sb.auth.signOut()}
+                  className="ml-1 px-2.5 py-1.5 text-xs rounded"
+                  style={{ border: `1px solid ${C.line}`, color: C.sub }}>登出</button>
               )}
             </nav>
           </div>
@@ -467,46 +451,12 @@ function App() {
         )}
       </main>
 
-      {gate && <Gate onPass={() => { setAdmin(true); setGate(false); }} onClose={() => setGate(false)} />}
-
       {toast && (
         <div className="fixed left-1/2 bottom-6 px-4 py-2.5 rounded text-sm toast"
           style={{ transform: "translateX(-50%)", background: C.ink, color: C.paper, maxWidth: "90vw" }}>
           {toast}
         </div>
       )}
-    </div>
-  );
-}
-
-/* 管理模式：擋住誤觸，不是資安機制。真正的權限等接上內網登入。 */
-const ADMIN_CODE = "kz2027";
-
-function Gate({ onPass, onClose }) {
-  const [v, setV] = useState("");
-  const [bad, setBad] = useState(false);
-  const go = () => (v === ADMIN_CODE ? onPass() : setBad(true));
-  return (
-    <div className="fixed inset-0 z-30 flex items-center justify-center p-4"
-      style={{ background: "rgba(36,26,28,.45)" }} onClick={onClose}>
-      <div className="rounded p-5" style={{ background: C.card, width: 300 }}
-        onClick={(e) => e.stopPropagation()}>
-        <p className="font-medium">進入管理模式</p>
-        <p className="text-xs mt-1 mb-3" style={{ color: C.sub }}>
-          管理模式才看得到任務、修改與匯出。
-        </p>
-        <input type="password" value={v} autoFocus
-          onChange={(e) => { setV(e.target.value); setBad(false); }}
-          onKeyDown={(e) => e.key === "Enter" && go()}
-          placeholder="管理碼" style={inp} />
-        {bad && <p className="text-xs mt-2" style={{ color: C.badText }}>管理碼不對</p>}
-        <div className="flex gap-2 mt-4">
-          <button onClick={onClose} className="flex-1 px-3 py-2 text-sm rounded"
-            style={{ border: `1px solid ${C.line}` }}>取消</button>
-          <button onClick={go} className="flex-1 px-3 py-2 text-sm rounded"
-            style={{ background: C.brand, color: "#fff" }}>進入</button>
-        </div>
-      </div>
     </div>
   );
 }
@@ -616,7 +566,7 @@ function DayCell({ date, s, selected, onClick }) {
           <Bar ratio={s.amRatio} left={s.am} />
           <Bar ratio={s.pmRatio} left={s.pm} />
           <span className="text-xs tnum mt-auto" style={{ color: TONE[toneOf(s.full)].t }}>
-            {s.full > 0 ? s.full : "額滿"}
+            {s.full <= 0 ? "額滿" : s.peak > 0 ? `已訂 ${s.peak}` : ""}
           </span>
         </>
       )}
@@ -671,22 +621,30 @@ function DayPanel({ date, s, onNew, admin, guest }) {
         </div>
       ) : (
         <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))" }}>
-          <Slot name="上半場" time={sessionTime(date, "上")} left={s.am} />
-          <Slot name="下半場" time={sessionTime(date, "下")} left={s.pm} />
+          <Slot name="上半場" time={sessionTime(date, "上")} left={s.am}
+            booked={s.amAll} child={s.amChild} other={s.amOther} />
+          <Slot name="下半場" time={sessionTime(date, "下")} left={s.pm}
+            booked={s.pmAll} child={s.pmChild} other={s.pmOther} />
           <Slot name="整天" time={sessionTime(date, "全")} left={s.full}
+            booked={s.peak} child={Math.max(s.amChild, s.pmChild)}
+            other={s.peak - Math.max(s.amChild, s.pmChild)}
             note="同時佔用上下半場" />
         </div>
       )}
 
-      {admin && s.eff.length > 0 && (
+      {s.eff.length > 0 && (
         <ul className="mt-3 text-sm" style={{ borderTop: `1px solid ${C.line}` }}>
           {s.eff.map((o) => (
-            <li key={o.id} className="py-2 flex justify-between gap-3"
+            <li key={o.id} className="py-2 flex justify-between gap-3 flex-wrap"
               style={{ borderBottom: `1px solid ${C.line}` }}>
-              <span>{o.單位}<span className="ml-2 text-xs" style={{ color: C.sub }}>
-                {o.場次 === "全" ? "整天" : o.場次 + "半場"}・全票 {o.全票}
-              </span></span>
-              <span className="text-xs" style={{ color: C.sub }}>{o.狀態}</span>
+              <span className={guest ? "tnum" : ""}>
+                {guest ? o.單號 : o.單位}
+                <span className="ml-2 text-xs tnum" style={{ color: C.sub }}>
+                  {o.場次 === "全" ? "整天" : o.場次 + "半場"}
+                  ・{headcount(o)} 人（全票 {o.全票}）
+                </span>
+              </span>
+              {!guest && <span className="text-xs" style={{ color: C.sub }}>{o.狀態}</span>}
             </li>
           ))}
         </ul>
@@ -695,16 +653,22 @@ function DayPanel({ date, s, onNew, admin, guest }) {
   );
 }
 
-function Slot({ name, time, left, note }) {
+function Slot({ name, time, left, booked, child, other, note }) {
   const tone = TONE[toneOf(left)];
   return (
     <div className="rounded p-3" style={{ background: tone.b }}>
       <div className="text-xs" style={{ color: tone.t }}>{name}　{time}</div>
       <div className="text-2xl font-semibold tnum mt-1" style={{ color: tone.t }}>
-        {left > 0 ? left : "額滿"}
+        {booked}
+        <span className="text-xs font-normal ml-1" style={{ opacity: .8 }}>人已訂</span>
       </div>
-      <div className="text-xs mt-0.5" style={{ color: tone.t, opacity: .8 }}>
-        {left > 0 ? "可售全票" : ""}{note ? `　${note}` : ""}
+      <div className="text-xs mt-1 tnum" style={{ color: tone.t, opacity: .9 }}>
+        全票 {child}　其他 {other}
+      </div>
+      <div className="text-xs mt-2 pt-2 tnum"
+        style={{ color: tone.t, borderTop: `1px solid ${tone.t}22` }}>
+        {left > 0 ? `尚可售全票 ${left}` : "額滿"}
+        {note ? `　${note}` : ""}
       </div>
     </div>
   );
