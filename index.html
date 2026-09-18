@@ -62,9 +62,9 @@ const ASSIGNMENTS = {
 };
 const ownerOf = (a) => ASSIGNMENTS[a] || "";
 
-/** 派對廳：實體 2 廳，每場固定 2 小時，開始時間自由選，系統自動算重疊 */
+/** 派對廳：實體 2 廳，起訖時間自由選，系統自動算時間重疊 */
 const PR_ROOMS_AT_ONCE = 2;
-const PR_DUR = 120;                       // 分鐘
+const PR_STEP = 30;                       // 分鐘，時間選單的間隔
 const OPEN_WEEKDAY = ["09:00", "20:00"];  // 平日營業
 const OPEN_HOLIDAY = ["10:00", "21:00"];  // 假日營業
 const openHours = (dateStr) => (isHoliday(dateStr) ? OPEN_HOLIDAY : OPEN_WEEKDAY);
@@ -72,27 +72,31 @@ const openHours = (dateStr) => (isHoliday(dateStr) ? OPEN_HOLIDAY : OPEN_WEEKDAY
 const toMin = (hhmm) => (+String(hhmm).slice(0, 2)) * 60 + (+String(hhmm).slice(3, 5));
 const toHHMM = (m) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
 
-/** 可選的開始時間：每半小時一格，結束不得超過打烊 */
-function prStartOptions(dateStr) {
+/** 營業時間內每半小時一格 */
+function timeMarks(dateStr, { from, to } = {}) {
   const [o, c] = openHours(dateStr);
+  const lo = from !== undefined ? from : toMin(o);
+  const hi = to !== undefined ? to : toMin(c);
   const out = [];
-  for (let m = toMin(o); m + PR_DUR <= toMin(c); m += 30) out.push(toHHMM(m));
+  for (let m = lo; m <= hi; m += PR_STEP) out.push(toHHMM(m));
   return out;
 }
+const prStartOptions = (d) => timeMarks(d, { to: toMin(openHours(d)[1]) - PR_STEP });
+const prEndOptions = (d, start) =>
+  start ? timeMarks(d, { from: toMin(start) + PR_STEP }) : [];
 
 /** 某個時間點上，已佔用幾廳 */
 function prUsedAt(list, minute) {
   return list.reduce((a, o) => {
-    const st = toMin(o.PR開始);
-    return a + (minute >= st && minute < st + PR_DUR ? (+o.PR廳數 || 0) : 0);
+    const st = toMin(o.PR開始), en = toMin(o.PR結束 || o.PR開始);
+    return a + (minute >= st && minute < en ? (+o.PR廳數 || 0) : 0);
   }, 0);
 }
 
-/** 新單放進去之後，這段時間內最高會同時用到幾廳 */
-function prPeak(list, start, qty) {
-  const st = toMin(start);
-  const points = [st, ...list.map((o) => toMin(o.PR開始))
-    .filter((pt) => pt > st && pt < st + PR_DUR)];
+/** 新單放進去之後，這段區間內最高會同時用到幾廳 */
+function prPeak(list, start, end, qty) {
+  const st = toMin(start), en = toMin(end);
+  const points = [st, ...list.map((o) => toMin(o.PR開始)).filter((pt) => pt > st && pt < en)];
   return Math.max(...points.map((pt) => prUsedAt(list, pt) + qty));
 }
 
@@ -239,7 +243,7 @@ const toApp = (r) => ({
   全票: r.full_ticket, 半票: r.half_ticket, 免票: r.free_ticket, 愛心: r.love_ticket,
   餐飲: r.meals, 劇院: r.theater, PR廳數: r.party_rooms, PR方案: r.party_plan || "",
   備註: r.note || "", 狀態: r.status, 建立: r.created_on,
-  階段: r.stage_log || {}, PR開始: r.pr_start || "",
+  階段: r.stage_log || {}, PR開始: r.pr_start || "", PR結束: r.pr_end || "",
 });
 
 const DB_MAP = {
@@ -249,7 +253,7 @@ const DB_MAP = {
   全票: "full_ticket", 半票: "half_ticket", 免票: "free_ticket", 愛心: "love_ticket",
   餐飲: "meals", 劇院: "theater", PR廳數: "party_rooms", PR方案: "party_plan",
   備註: "note", 狀態: "status", 建立: "created_on",
-  階段: "stage_log", PR開始: "pr_start",
+  階段: "stage_log", PR開始: "pr_start", PR結束: "pr_end",
 };
 
 const toDb = (o) => {
@@ -270,7 +274,7 @@ const toGuest = (r) => ({
   日期: r.visit_date, 場次: r.slot, 包場: r.buyout,
   全票: r.full_ticket, 半票: r.other_ticket, 免票: 0, 愛心: 0,
   狀態: "已確認",
-  PR廳數: r.party_rooms || 0, PR開始: r.pr_start || "",
+  PR廳數: r.party_rooms || 0, PR開始: r.pr_start || "", PR結束: r.pr_end || "",
 });
 
 function Splash({ text }) {
@@ -735,11 +739,11 @@ function DayPanel({ date, s, onNew, admin, guest }) {
       {!guest && (
         <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${C.line}` }}>
           <p className="text-xs mb-2" style={{ color: C.sub }}>
-            派對廳佔用　實體 {PR_ROOMS_AT_ONCE} 廳，每場 2 小時。數字是該小時內同時佔用的廳數
+            派對廳佔用　實體 {PR_ROOMS_AT_ONCE} 廳。數字是該小時內同時佔用的廳數
           </p>
           <div className="flex gap-px flex-wrap">
             {(() => {
-              const list = s.eff.filter((o) => o.PR廳數 > 0 && o.PR開始);
+              const list = s.eff.filter((o) => o.PR廳數 > 0 && o.PR開始 && o.PR結束);
               const [op, cl] = openHours(date);
               const cells = [];
               for (let m = toMin(op); m < toMin(cl); m += 60) {
@@ -760,8 +764,7 @@ function DayPanel({ date, s, onNew, admin, guest }) {
             <ul className="mt-2 text-xs tnum" style={{ color: C.sub }}>
               {s.eff.filter((o) => o.PR廳數 > 0 && o.PR開始).map((o) => (
                 <li key={o.id}>
-                  {o.PR開始}–{toHHMM(toMin(o.PR開始) + PR_DUR)}　{o.PR廳數} 廳　
-                  {guest ? o.單號 : o.單位}
+                  {o.PR開始}–{o.PR結束}　{o.PR廳數} 廳　{guest ? o.單號 : o.單位}
                 </li>
               ))}
             </ul>
@@ -828,12 +831,13 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
     單位: "", 客群: "學校", 業務歸屬: "", 聯絡人: "", 電話: "",
     日期: date || todayISO(), 包場: false, 場次: isHoliday(date || todayISO()) ? "上" : "全",
     全票: "", 半票: "", 免票: "", 愛心: "",
-    餐飲: 0, 劇院: 0, PR廳數: 0, PR開始: "", PR方案: "", 備註: "",
+    餐飲: 0, 劇院: 0, PR廳數: 0, PR開始: "", PR結束: "", PR方案: "", 備註: "",
   });
   const set = (k, v) => setF((p) => {
     const n = { ...p, [k]: v };
     if (!n.包場 && n.場次 === "全" && isHoliday(n.日期)) n.場次 = "上";
-    if (n.PR開始 && !prStartOptions(n.日期).includes(n.PR開始)) n.PR開始 = "";
+    if (n.PR開始 && !prStartOptions(n.日期).includes(n.PR開始)) { n.PR開始 = ""; n.PR結束 = ""; }
+    if (n.PR結束 && n.PR開始 && toMin(n.PR結束) <= toMin(n.PR開始)) n.PR結束 = "";
     return n;
   });
 
@@ -872,13 +876,17 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
     if (total > CAP_TOTAL) errors.push(`包場總人數上限 ${CAP_TOTAL} 位`);
   }
   if (+f.餐飲 > total && total > 0) errors.push(`餐飲數量超過總人數 ${total} 位`);
-  if (f.PR廳數 > 0 && !f.PR開始) errors.push("選一個派對廳開始時間");
-  if (f.PR廳數 > 0 && f.PR開始) {
-    const others = s.eff.filter((o) => o.PR廳數 > 0 && o.PR開始);
-    const peak = prPeak(others, f.PR開始, +f.PR廳數);
-    if (peak > PR_ROOMS_AT_ONCE)
-      errors.push(`派對廳 ${f.PR開始}–${toHHMM(toMin(f.PR開始) + PR_DUR)} 這段時間會同時用到 `
-        + `${peak} 廳，超過 ${PR_ROOMS_AT_ONCE} 廳。請換時間或減少數量`);
+  if (f.PR廳數 > 0 && (!f.PR開始 || !f.PR結束)) errors.push("填上派對廳的起訖時間");
+  if (f.PR廳數 > 0 && f.PR開始 && f.PR結束) {
+    if (toMin(f.PR結束) <= toMin(f.PR開始)) {
+      errors.push("派對廳結束時間要晚於開始時間");
+    } else {
+      const others = s.eff.filter((o) => o.PR廳數 > 0 && o.PR開始 && o.PR結束);
+      const peak = prPeak(others, f.PR開始, f.PR結束, +f.PR廳數);
+      if (peak > PR_ROOMS_AT_ONCE)
+        errors.push(`派對廳 ${f.PR開始}–${f.PR結束} 這段時間會同時用到 ${peak} 廳，`
+          + `超過 ${PR_ROOMS_AT_ONCE} 廳。請換時間或減少數量`);
+    }
   }
 
   const box = useRef(null);
@@ -995,14 +1003,21 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
                 </select>
               </Field>
               {f.PR廳數 > 0 && (
-                <Field label="派對廳　開始時間（固定 2 小時）">
-                  <select value={f.PR開始} onChange={(e) => set("PR開始", e.target.value)} style={inp}>
-                    <option value="">請選擇</option>
-                    {prStartOptions(f.日期).map((x) => (
-                      <option key={x} value={x}>{x} – {toHHMM(toMin(x) + PR_DUR)}</option>
-                    ))}
-                  </select>
-                </Field>
+                <>
+                  <Field label="派對廳　開始">
+                    <select value={f.PR開始} onChange={(e) => set("PR開始", e.target.value)} style={inp}>
+                      <option value="">請選擇</option>
+                      {prStartOptions(f.日期).map((x) => <option key={x}>{x}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="派對廳　結束">
+                    <select value={f.PR結束} onChange={(e) => set("PR結束", e.target.value)}
+                      disabled={!f.PR開始} style={inp}>
+                      <option value="">請選擇</option>
+                      {prEndOptions(f.日期, f.PR開始).map((x) => <option key={x}>{x}</option>)}
+                    </select>
+                  </Field>
+                </>
               )}
               {f.PR廳數 > 0 && (
                 <Field label={`派對方案（每廳 ${PR_PER_ROOM} 位）`} wide>
@@ -1135,7 +1150,7 @@ function TaskCard({ o, onMove, onRemove, onEdit, onField }) {
             <div className="text-xs mt-0.5" style={{ color: C.sub }}>
               {[o.餐飲 > 0 && `餐飲 ${o.餐飲}`,
                 o.劇院 > 0 && `劇院 ${o.劇院}`,
-                o.PR廳數 > 0 && `派對廳 ${o.PR廳數} 廳${o.PR開始 ? ` ${o.PR開始}–${toHHMM(toMin(o.PR開始) + PR_DUR)}` : ""}${o.PR方案 ? "・" + o.PR方案 : ""}`]
+                o.PR廳數 > 0 && `派對廳 ${o.PR廳數} 廳${o.PR開始 ? ` ${o.PR開始}–${o.PR結束}` : ""}${o.PR方案 ? "・" + o.PR方案 : ""}`]
                 .filter(Boolean).join("　")}
             </div>
           )}
@@ -1350,7 +1365,7 @@ function ExportView({ orders, say }) {
     劇院數量: o.劇院 || 0,
     派對廳數量: o.PR廳數 || 0,
     派對廳開始: o.PR開始 || "",
-    派對廳結束: o.PR開始 ? toHHMM(toMin(o.PR開始) + PR_DUR) : "",
+    派對廳結束: o.PR結束 || "",
     派對方案: o.PR方案 || "",
     狀態: o.狀態, 階段天數: stageLabel(o),
     建立日: o.建立, 佔用名額: occupies(o) ? "是" : "否",
