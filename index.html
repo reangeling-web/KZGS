@@ -62,11 +62,17 @@ const ASSIGNMENTS = {
 };
 const ownerOf = (a) => ASSIGNMENTS[a] || "";
 
+/** 派對廳：2 廳 × 5 個兩小時梯次 ＝ 每日 10 個庫存 */
+const PR_PER_SLOT = 2;
+const PR_SESSIONS_WEEKDAY = ["09:00–11:00", "11:00–13:00", "13:00–15:00", "15:00–17:00", "17:00–19:00"];
+const PR_SESSIONS_HOLIDAY = ["10:00–12:00", "12:00–14:00", "14:00–16:00", "16:00–18:00", "18:00–20:00"];
+const prSessions = (dateStr) => (isHoliday(dateStr) ? PR_SESSIONS_HOLIDAY : PR_SESSIONS_WEEKDAY);
+const PR_DAY_STOCK = 10;
+
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
 const FLOW = ["檔期暫留", "已報價", "已確認", "行前作業", "已到訪", "已結案"];
 const HOLD_STATES = ["檔期暫留", "已報價", "已確認", "行前作業"];
-const EXPIRABLE = ["檔期暫留", "已報價"];
 
 /** 平假日定義由「行事曆」分頁維護，存在資料庫。沒定義的日期才退回週末判斷。 */
 let CAL = {};
@@ -95,14 +101,6 @@ function sessionTime(dateStr, slot) {
 function daysBetween(a, b) {
   return Math.round((parse(b) - parse(a)) / 86400000);
 }
-/** 暫留效期跟到訪日連動：越接近越短 */
-function holdDays(fromISO, visitISO) {
-  const gap = daysBetween(fromISO, visitISO);
-  if (gap >= 90) return 14;
-  if (gap >= 30) return 7;
-  if (gap >= 14) return 3;
-  return 2;
-}
 function addDays(dateStr, n) {
   const d = parse(dateStr); d.setDate(d.getDate() + n); return iso(d);
 }
@@ -117,9 +115,23 @@ function makeOrderNo(taken) {
 }
 
 const headcount = (o) => (+o.全票 || 0) + (+o.半票 || 0) + (+o.免票 || 0) + (+o.愛心 || 0);
-const isExpired = (o) =>
-  EXPIRABLE.includes(o.狀態) && o.到期 && o.到期 < todayISO();
+/* 檔期是否卸下改由人工判斷，系統不再自動到期 */
+const isExpired = () => false;
 const occupies = (o) => HOLD_STATES.includes(o.狀態) && !isExpired(o);
+
+/** 每個階段用自己的說法數天：當天算第 1 日 */
+const STAGE_WORD = {
+  檔期暫留: "已預留", 已報價: "已報價", 已確認: "已簽約",
+  已到訪: "到訪於", 已結案: "結案於", 流失: "流失於",
+};
+function stageLabel(o) {
+  const at = (o.階段 || {})[o.狀態];
+  if (o.狀態 === "行前作業")
+    return o.日期 ? `活動倒數 ${Math.max(0, daysBetween(todayISO(), o.日期))} 日` : "行前作業";
+  if (!at) return o.狀態;
+  if (["已到訪", "已結案", "流失"].includes(o.狀態)) return `${STAGE_WORD[o.狀態]} ${at}`;
+  return `${STAGE_WORD[o.狀態] || o.狀態} ${daysBetween(at, todayISO()) + 1} 日`;
+}
 
 /* ------------------------------------------------- 名額計算：包場優先 */
 function dayStats(orders, dateStr, excludeId) {
@@ -185,7 +197,8 @@ const toApp = (r) => ({
   聯絡人: r.contact || "", 電話: r.phone || "", 日期: r.visit_date, 場次: r.slot, 包場: r.buyout,
   全票: r.full_ticket, 半票: r.half_ticket, 免票: r.free_ticket, 愛心: r.love_ticket,
   餐飲: r.meals, 劇院: r.theater, PR廳數: r.party_rooms, PR方案: r.party_plan || "",
-  備註: r.note || "", 狀態: r.status, 建立: r.created_on, 到期: r.hold_until,
+  備註: r.note || "", 狀態: r.status, 建立: r.created_on,
+  階段: r.stage_log || {}, PR梯次: r.pr_session || "",
 });
 
 const DB_MAP = {
@@ -194,7 +207,8 @@ const DB_MAP = {
   聯絡人: "contact", 電話: "phone", 日期: "visit_date", 場次: "slot",
   全票: "full_ticket", 半票: "half_ticket", 免票: "free_ticket", 愛心: "love_ticket",
   餐飲: "meals", 劇院: "theater", PR廳數: "party_rooms", PR方案: "party_plan",
-  備註: "note", 狀態: "status", 建立: "created_on", 到期: "hold_until",
+  備註: "note", 狀態: "status", 建立: "created_on",
+  階段: "stage_log", PR梯次: "pr_session",
 };
 
 const toDb = (o) => {
@@ -214,7 +228,8 @@ const toGuest = (r) => ({
   id: r.order_no, 單號: r.order_no, 單位: "",
   日期: r.visit_date, 場次: r.slot, 包場: r.buyout,
   全票: r.full_ticket, 半票: r.other_ticket, 免票: 0, 愛心: 0,
-  狀態: "已確認", 到期: null,
+  狀態: "已確認",
+  PR廳數: r.party_rooms || 0, PR梯次: r.pr_session || "",
 });
 
 function Splash({ text }) {
@@ -338,7 +353,7 @@ function App() {
       客戶ID: "",
       狀態: "檔期暫留",
       建立: created,
-      到期: addDays(created, holdDays(created, o.日期)),
+      階段: { 檔期暫留: created },
     };
     const { error } = await sb.from("bookings").insert(toDb(rec));
     if (error) { say(clean(error.message)); return; }
@@ -361,16 +376,9 @@ function App() {
 
   const move = async (id, status) => {
     const o = orders.find((x) => x.id === id);
-    const f = { status };
-    if (status === "檔期暫留") f.hold_until = addDays(todayISO(), holdDays(todayISO(), o.日期));
-    if (!EXPIRABLE.includes(status) && status !== "流失") f.hold_until = null;
-    await patch(id, f);
-  };
-
-  const renew = async (id) => {
-    const o = orders.find((x) => x.id === id);
-    if (await patch(id, { hold_until: addDays(todayISO(), holdDays(todayISO(), o.日期)) }))
-      say("保留期已重新計算");
+    const log = { ...(o.階段 || {}) };
+    if (!log[status]) log[status] = todayISO();      // 第一次進入該階段才記，重複推進不覆蓋
+    await patch(id, { status, stage_log: log });
   };
 
   const saveCal = async (rows) => {
@@ -396,8 +404,6 @@ function App() {
   if (session === undefined) return <Splash text="載入中…" />;
   if (!session && !guestMode) return <LoginPage onGuest={() => setGuestMode(true)} />;
 
-  const expiredList = orders.filter(isExpired);
-
   if (!loaded) return <Splash text="讀取檔期資料…" />;
 
   return (
@@ -422,12 +428,6 @@ function App() {
                     ? { background: C.brand, color: "#fff" }
                     : { color: C.sub, background: "transparent" }}>
                   {t}
-                  {t === "任務" && expiredList.length > 0 && (
-                    <span className="ml-1.5 text-xs px-1.5 rounded"
-                      style={{ background: tab === t ? "#fff" : C.badBg, color: C.badText }}>
-                      {expiredList.length}
-                    </span>
-                  )}
                 </button>
               ))}
               {guest ? (
@@ -475,7 +475,7 @@ function App() {
           />
         )}
         {tab === "任務" && admin && (
-          <TaskView orders={orders} onMove={move} onRenew={renew} onRemove={remove} onEdit={setEditing} onField={setField} />
+          <TaskView orders={orders} onMove={move} onRemove={remove} onEdit={setEditing} onField={setField} />
         )}
         {tab === "匯出" && admin && <ExportView orders={orders} say={say} />}
         {tab === "行事曆" && admin && (
@@ -657,7 +657,7 @@ function DayPanel({ date, s, onNew, admin, guest }) {
           <strong>當日已包場</strong>，不再對外開放，上下半場一律不可售。
           {!guest && s.buyout.單位 && (
             <div className="mt-1" style={{ color: C.ink }}>
-              {s.buyout.單位}・{s.buyout.場次 === "全" ? "整天" : s.buyout.場次 + "半場"}・{s.buyout.狀態}
+              {s.buyout.單位}・{s.buyout.場次 === "全" ? "全場" : s.buyout.場次 + "半場"}・{s.buyout.狀態}
             </div>
           )}
         </div>
@@ -671,7 +671,7 @@ function DayPanel({ date, s, onNew, admin, guest }) {
             booked={s.pmAll} child={s.pmChild} other={s.pmOther}
             lock={s.pmLock} guest={guest} />
           {!hol && !s.amLock && !s.pmLock && (
-            <Slot name="整天" time={sessionTime(date, "全")} left={s.full}
+            <Slot name="全場" time={sessionTime(date, "全")} left={s.full}
               booked={s.dayAll} child={s.dayChild} other={s.dayAll - s.dayChild}
               note="同時佔用上下半場" />
           )}
@@ -691,6 +691,29 @@ function DayPanel({ date, s, onNew, admin, guest }) {
         </>
       )}
 
+      {!guest && (
+        <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${C.line}` }}>
+          <p className="text-xs mb-2" style={{ color: C.sub }}>
+            派對廳庫存　每梯次 {PR_PER_SLOT} 廳・全日 {PR_DAY_STOCK} 個
+          </p>
+          <div className="flex gap-2 flex-wrap">
+            {prSessions(date).map((ss) => {
+              const used = s.eff.filter((o) => o.PR梯次 === ss)
+                                .reduce((a, o) => a + (+o.PR廳數 || 0), 0);
+              const free = PR_PER_SLOT - used;
+              const tone = free <= 0 ? TONE.bad : free < PR_PER_SLOT ? TONE.warn : TONE.ok;
+              return (
+                <div key={ss} className="rounded px-2.5 py-1.5 tnum"
+                  style={{ background: tone.b, color: tone.t }}>
+                  <div className="text-xs">{ss}</div>
+                  <div className="text-xs font-semibold">{free > 0 ? `剩 ${free} 廳` : "已滿"}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {s.eff.length > 0 && (
         <ul className="mt-3 text-sm" style={{ borderTop: `1px solid ${C.line}` }}>
           {s.eff.map((o) => (
@@ -699,7 +722,7 @@ function DayPanel({ date, s, onNew, admin, guest }) {
               <span className={guest ? "tnum" : ""}>
                 {guest ? o.單號 : o.單位}
                 <span className="ml-2 text-xs tnum" style={{ color: C.sub }}>
-                  {o.場次 === "全" ? "整天" : o.場次 + "半場"}
+                  {o.場次 === "全" ? "全場" : o.場次 + "半場"}
                   ・{headcount(o)} 人（全票 {o.全票}）
                 </span>
               </span>
@@ -748,13 +771,14 @@ function Slot({ name, time, left, booked, child, other, note, lock, guest }) {
 function RequestForm({ date, orders, editing, onClose, onSubmit }) {
   const [f, setF] = useState(() => editing ? { ...editing } : {
     單位: "", 客群: "學校", 業務歸屬: "", 聯絡人: "", 電話: "",
-    日期: date || todayISO(), 包場: false, 場次: "上",
+    日期: date || todayISO(), 包場: false, 場次: isHoliday(date || todayISO()) ? "上" : "全",
     全票: "", 半票: "", 免票: "", 愛心: "",
-    餐飲: 0, 劇院: 0, PR廳數: 0, PR方案: "", 備註: "",
+    餐飲: 0, 劇院: 0, PR廳數: 0, PR梯次: "", PR方案: "", 備註: "",
   });
   const set = (k, v) => setF((p) => {
     const n = { ...p, [k]: v };
     if (!n.包場 && n.場次 === "全" && isHoliday(n.日期)) n.場次 = "上";
+    if (n.PR梯次 && !prSessions(n.日期).includes(n.PR梯次)) n.PR梯次 = "";
     return n;
   });
 
@@ -776,7 +800,7 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
   const errors = [];
   if (!f.單位.trim()) errors.push("填一下單位名稱");
   if (!f.包場 && f.場次 === "全" && isHoliday(f.日期))
-    errors.push("假日強迫清場，整天僅開放包場。請改選上半場或下半場");
+    errors.push("假日強迫清場，全場僅開放包場。請改選上半場或下半場");
   if (!f.業務歸屬) errors.push("選一個業務歸屬，負責窗口會自動帶出");
   const overlaps = (a, b) => a === "全" || b === "全" || a === b;
   const lock = f.場次 === "上" ? s.amLock : f.場次 === "下" ? s.pmLock : (s.amLock || s.pmLock);
@@ -793,8 +817,13 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
     if (total > CAP_TOTAL) errors.push(`包場總人數上限 ${CAP_TOTAL} 位`);
   }
   if (+f.餐飲 > total && total > 0) errors.push(`餐飲數量超過總人數 ${total} 位`);
-
-  const expiry = addDays(todayISO(), holdDays(todayISO(), f.日期));
+  if (f.PR廳數 > 0 && !f.PR梯次) errors.push("選一個派對廳梯次");
+  if (f.PR廳數 > 0 && f.PR梯次) {
+    const used = s.eff.filter((o) => o.PR梯次 === f.PR梯次)
+                      .reduce((a, o) => a + (+o.PR廳數 || 0), 0);
+    if (used + f.PR廳數 > PR_PER_SLOT)
+      errors.push(`${f.PR梯次} 只剩 ${PR_PER_SLOT - used} 廳可用`);
+  }
 
   const box = useRef(null);
   useEffect(() => {
@@ -860,7 +889,7 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
                 <select value={f.場次} onChange={(e) => set("場次", e.target.value)} style={inp}>
                   <option value="上">上半場</option>
                   <option value="下">下半場</option>
-                  {(f.包場 || !isHoliday(f.日期)) && <option value="全">整天</option>}
+                  {(f.包場 || !isHoliday(f.日期)) && <option value="全">全場</option>}
                 </select>
               </Field>
             </Row>
@@ -904,11 +933,19 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
                   <option value={0}>0</option><option value={1}>1</option>
                 </select>
               </Field>
-              <Field label={`派對廳　數量（上限 ${PR_ROOMS}）`}>
+              <Field label={`派對廳　數量（每梯次上限 ${PR_PER_SLOT}）`}>
                 <select value={f.PR廳數} onChange={(e) => set("PR廳數", +e.target.value)} style={inp}>
                   <option value={0}>0</option><option value={1}>1</option><option value={2}>2</option>
                 </select>
               </Field>
+              {f.PR廳數 > 0 && (
+                <Field label="派對廳　梯次（每場 2 小時）">
+                  <select value={f.PR梯次} onChange={(e) => set("PR梯次", e.target.value)} style={inp}>
+                    <option value="">請選擇</option>
+                    {prSessions(f.日期).map((x) => <option key={x}>{x}</option>)}
+                  </select>
+                </Field>
+              )}
               {f.PR廳數 > 0 && (
                 <Field label={`派對方案（每廳 ${PR_PER_ROOM} 位）`} wide>
                   <select value={f.PR方案} onChange={(e) => set("PR方案", e.target.value)} style={inp}>
@@ -919,7 +956,8 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
               )}
             </Row>
             <p className="text-xs" style={{ color: C.sub }}>
-              劇院 {TH_SEATS} 席・派對廳每廳 {PR_PER_ROOM} 位
+              劇院 {TH_SEATS} 席・派對廳每廳 {PR_PER_ROOM} 位・
+              每天 {PR_DAY_STOCK} 個庫存（{PR_PER_SLOT} 廳 × 5 梯次）
             </p>
           </div>
 
@@ -935,8 +973,8 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
 
           <p className="text-xs" style={{ color: C.sub }}>
             {editing
-              ? `狀態維持「${editing.狀態}」，名額會依新內容重算。保留到期日不變。`
-              : <>送出後檔期進入暫留，保留到 <span className="tnum">{expiry}</span>。未收到訂金會自動釋出，不需要手動取消。</>}
+              ? `狀態維持「${editing.狀態}」，名額會依新內容重算。`
+              : "送出後檔期進入預留並開始計算天數。要不要卸下檔期由業務自行判斷，系統不會自動釋出。"}
           </p>
         </div>
 
@@ -974,12 +1012,11 @@ function Field({ label, children, wide }) {
 }
 
 /* ---------------------------------------------------------------- 任務板 */
-function TaskView({ orders, onMove, onRenew, onRemove, onEdit, onField }) {
+function TaskView({ orders, onMove, onRemove, onEdit, onField }) {
   const [filter, setFilter] = useState("進行中");
-  const expired = orders.filter(isExpired);
-  const live = orders.filter((o) => !["已結案", "流失", "已到訪"].includes(o.狀態) && !isExpired(o));
+  const live = orders.filter((o) => !["已結案", "流失", "已到訪"].includes(o.狀態));
   const done = orders.filter((o) => ["已結案", "流失", "已到訪"].includes(o.狀態));
-  const list = filter === "進行中" ? live : filter === "逾期" ? expired : done;
+  const list = filter === "進行中" ? live : done;
 
   if (!orders.length) {
     return (
@@ -995,7 +1032,7 @@ function TaskView({ orders, onMove, onRenew, onRemove, onEdit, onField }) {
   return (
     <>
       <div className="flex gap-1 mb-3">
-        {[["進行中", live.length], ["逾期", expired.length], ["已結束", done.length]].map(([k, n]) => (
+        {[["進行中", live.length], ["已結束", done.length]].map(([k, n]) => (
           <button key={k} onClick={() => setFilter(k)} className="px-3 py-1.5 text-sm rounded"
             style={filter === k
               ? { background: C.ink, color: C.paper }
@@ -1005,39 +1042,28 @@ function TaskView({ orders, onMove, onRenew, onRemove, onEdit, onField }) {
         ))}
       </div>
 
-      {filter === "逾期" && expired.length > 0 && (
-        <p className="text-sm mb-3 rounded p-3" style={{ background: C.warnBg, color: C.warnText }}>
-          這些單的保留期已過，名額已經自動還回檔期。續期會重新計算保留日，標記流失則收進已結束。
-        </p>
-      )}
-
       {list.length === 0
         ? <p className="text-sm" style={{ color: C.sub }}>這一區目前是空的。</p>
         : <ul className="grid gap-2">
             {list.map((o) => (
-              <TaskCard key={o.id} o={o} onMove={onMove} onRenew={onRenew} onRemove={onRemove} onEdit={onEdit} onField={onField} />
+              <TaskCard key={o.id} o={o} onMove={onMove} onRemove={onRemove} onEdit={onEdit} onField={onField} />
             ))}
           </ul>}
     </>
   );
 }
 
-function TaskCard({ o, onMove, onRenew, onRemove, onEdit, onField }) {
-  const exp = isExpired(o);
+function TaskCard({ o, onMove, onRemove, onEdit, onField }) {
   const idx = FLOW.indexOf(o.狀態);
   const next = idx >= 0 && idx < FLOW.length - 1 ? FLOW[idx + 1] : null;
-  const dLeft = o.到期 ? daysBetween(todayISO(), o.到期) : null;
 
   return (
-    <li className="rounded p-3" style={{
-      background: C.card,
-      border: `1px solid ${exp ? C.badBar : C.line}`,
-    }}>
+    <li className="rounded p-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
       <div className="flex justify-between gap-3 flex-wrap">
         <div>
           <div className="font-medium">{o.單位}</div>
           <div className="text-xs mt-0.5 tnum" style={{ color: C.sub }}>
-            {o.單號 || "—"}・{o.日期}　{o.包場 ? "包場" : o.場次 === "全" ? "整天" : o.場次 + "半場"}
+            {o.單號 || "—"}・{o.日期}　{o.包場 ? "包場" : o.場次 === "全" ? "全場" : o.場次 + "半場"}
             ・全票 {o.全票}・共 {headcount(o)} 位
           </div>
           <div className="text-xs mt-0.5" style={{ color: C.sub }}>
@@ -1051,7 +1077,7 @@ function TaskCard({ o, onMove, onRenew, onRemove, onEdit, onField }) {
             <div className="text-xs mt-0.5" style={{ color: C.sub }}>
               {[o.餐飲 > 0 && `餐飲 ${o.餐飲}`,
                 o.劇院 > 0 && `劇院 ${o.劇院}`,
-                o.PR廳數 > 0 && `派對廳 ${o.PR廳數}${o.PR方案 ? "・" + o.PR方案 : ""}`]
+                o.PR廳數 > 0 && `派對廳 ${o.PR廳數} 廳${o.PR梯次 ? " " + o.PR梯次 : ""}${o.PR方案 ? "・" + o.PR方案 : ""}`]
                 .filter(Boolean).join("　")}
             </div>
           )}
@@ -1060,11 +1086,11 @@ function TaskCard({ o, onMove, onRenew, onRemove, onEdit, onField }) {
           <span className="text-xs px-2 py-0.5 rounded" style={{ background: C.paper, color: C.ink }}>
             {o.狀態}
           </span>
-          {o.到期 && EXPIRABLE.includes(o.狀態) && (
-            <div className="text-xs mt-1 tnum" style={{ color: exp ? C.badText : C.sub }}>
-              {exp ? `已逾期 ${-dLeft} 天` : `保留剩 ${dLeft} 天`}
-            </div>
-          )}
+          <div className="text-xs mt-1 tnum"
+            style={{ color: o.狀態 === "行前作業" ? C.brand : C.sub,
+                     fontWeight: o.狀態 === "行前作業" ? 600 : 400 }}>
+            {stageLabel(o)}
+          </div>
         </div>
       </div>
 
@@ -1076,11 +1102,7 @@ function TaskCard({ o, onMove, onRenew, onRemove, onEdit, onField }) {
       </label>
 
       <div className="flex gap-2 mt-3 flex-wrap">
-        {exp && (
-          <button onClick={() => onRenew(o.id)} className="px-2.5 py-1 text-xs rounded"
-            style={{ background: C.gold, color: C.ink }}>續期</button>
-        )}
-        {next && !exp && (
+        {next && (
           <button onClick={() => onMove(o.id, next)} className="px-2.5 py-1 text-xs rounded"
             style={{ background: C.brand, color: "#fff" }}>推進到「{next}」</button>
         )}
@@ -1259,17 +1281,18 @@ function ExportView({ orders, say }) {
     業務歸屬: o.業務歸屬 || "", 負責窗口: o.負責窗口 || "",
     客群: o.客群, 聯絡人: o.聯絡人, 電話: o.電話,
     預定日期: o.日期, 日別: isHoliday(o.日期) ? "假日" : "平日",
-    場次: o.包場 ? "包場-" + (o.場次 === "全" ? "整天" : o.場次 + "半場")
-                 : (o.場次 === "全" ? "整天" : o.場次 + "半場"),
+    場次: o.包場 ? "包場-" + (o.場次 === "全" ? "全場" : o.場次 + "半場")
+                 : (o.場次 === "全" ? "全場" : o.場次 + "半場"),
     場次時間: sessionTime(o.日期, o.場次),
     包場: o.包場 ? "Y" : "N",
     全票: o.全票, 半票: o.半票, 免票: o.免票, 愛心票: o.愛心, 總人數: headcount(o),
     餐飲數量: o.餐飲 || 0,
     劇院數量: o.劇院 || 0,
     派對廳數量: o.PR廳數 || 0,
+    派對廳梯次: o.PR梯次 || "",
     派對方案: o.PR方案 || "",
-    狀態: isExpired(o) ? "逾期未處理" : o.狀態,
-    建立日: o.建立, 保留到期: o.到期 || "", 佔用名額: occupies(o) ? "是" : "否",
+    狀態: o.狀態, 階段天數: stageLabel(o),
+    建立日: o.建立, 佔用名額: occupies(o) ? "是" : "否",
     備註: o.備註,
   }));
 
@@ -1282,7 +1305,7 @@ function ExportView({ orders, say }) {
         當日包場: s.buyout ? "Y" : "N",
         上半場可售: s.buyout ? 0 : s.am,
         下半場可售: s.buyout ? 0 : s.pm,
-        整天可售: s.buyout ? 0 : s.full,
+        全場可售: s.buyout ? 0 : s.full,
         佔名額筆數: s.eff.length,
       };
     });
