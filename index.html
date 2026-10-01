@@ -104,6 +104,28 @@ const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典�
 
 const FLOW = ["檔期暫留", "已報價", "已確認", "行前作業", "已到訪", "已結案"];
 const HOLD_STATES = ["檔期暫留", "已報價", "已確認", "行前作業"];
+/** 排序用：越接近成交的排越前面，沒進度的排後面 */
+const STAGE_RANK = {
+  已結案: 6, 已到訪: 5, 行前作業: 4, 已確認: 3, 已報價: 2, 檔期暫留: 1, 流失: 0,
+};
+const byStage = (a, b) =>
+  (STAGE_RANK[b.狀態] ?? 0) - (STAGE_RANK[a.狀態] ?? 0) ||
+  String(a.日期).localeCompare(String(b.日期));
+const money = (n) => (+n || 0).toLocaleString("zh-TW");
+
+/** 金額明細：最多五列，保證金可退所以不計入營收 */
+const PAY_KINDS = ["全額", "訂金", "尾款", "保證金", "其他"];
+const PAY_WAYS = ["匯款", "現金", "支票", "刷卡", "其他"];
+const PAY_MAX = 5;
+const blankPay = () => ({ 類別: "訂金", 金額: "", 付款日: "", 方式: "" });
+
+const payRows = (o) => (Array.isArray(o.收款) ? o.收款 : []);
+/** 預估營收＝明細加總，扣掉保證金 */
+const estRevenue = (rows) => rows.reduce(
+  (a, r) => a + (r.類別 === "保證金" ? 0 : (+r.金額 || 0)), 0);
+/** 已收＝有填付款日的那幾列 */
+const paidAmount = (rows) => rows.reduce(
+  (a, r) => a + (r.付款日 ? (+r.金額 || 0) : 0), 0);
 
 /** 平假日定義由「行事曆」分頁維護，存在資料庫。沒定義的日期才退回週末判斷。 */
 let CAL = {};
@@ -244,6 +266,7 @@ const toApp = (r) => ({
   餐飲: r.meals, 劇院: r.theater, PR廳數: r.party_rooms, PR方案: r.party_plan || "",
   備註: r.note || "", 狀態: r.status, 建立: r.created_on,
   階段: r.stage_log || {}, PR開始: r.pr_start || "", PR結束: r.pr_end || "",
+  預估營收: r.est_revenue || 0, 收款: r.payments || [],
 });
 
 const DB_MAP = {
@@ -254,6 +277,7 @@ const DB_MAP = {
   餐飲: "meals", 劇院: "theater", PR廳數: "party_rooms", PR方案: "party_plan",
   備註: "note", 狀態: "status", 建立: "created_on",
   階段: "stage_log", PR開始: "pr_start", PR結束: "pr_end",
+  預估營收: "est_revenue", 收款: "payments",
 };
 
 const toDb = (o) => {
@@ -262,6 +286,7 @@ const toDb = (o) => {
   if (o.包場 !== undefined) d.buyout = !!o.包場;
   for (const n of ["full_ticket","half_ticket","free_ticket","love_ticket","meals","theater","party_rooms"])
     if (d[n] !== undefined) d[n] = +d[n] || 0;
+  if (d.est_revenue !== undefined) d.est_revenue = +d.est_revenue || 0;
   if (d.hold_until === "") d.hold_until = null;
   return d;
 };
@@ -827,11 +852,14 @@ function Slot({ name, time, left, booked, child, other, note, lock, guest }) {
 
 /* ------------------------------------------------------------ 需求登記 */
 function RequestForm({ date, orders, editing, onClose, onSubmit }) {
-  const [f, setF] = useState(() => editing ? { ...editing } : {
+  const [f, setF] = useState(() => editing
+    ? { ...editing, 收款: payRows(editing).length ? payRows(editing) : [blankPay()] }
+    : {
     單位: "", 客群: "學校", 業務歸屬: "", 聯絡人: "", 電話: "",
     日期: date || todayISO(), 包場: false, 場次: isHoliday(date || todayISO()) ? "上" : "全",
     全票: "", 半票: "", 免票: "", 愛心: "",
-    餐飲: 0, 劇院: 0, PR廳數: 0, PR開始: "", PR結束: "", PR方案: "", 備註: "",
+    餐飲: 0, 劇院: 0, PR廳數: 0, PR開始: "", PR結束: "", PR方案: "",
+    收款: [blankPay()], 備註: "",
   });
   const set = (k, v) => setF((p) => {
     const n = { ...p, [k]: v };
@@ -839,6 +867,18 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
     if (n.PR開始 && !prStartOptions(n.日期).includes(n.PR開始)) { n.PR開始 = ""; n.PR結束 = ""; }
     if (n.PR結束 && n.PR開始 && toMin(n.PR結束) <= toMin(n.PR開始)) n.PR結束 = "";
     return n;
+  });
+
+  const setPay = (i, k, v) => setF((p) => {
+    const rows = [...(p.收款 || [])];
+    rows[i] = { ...rows[i], [k]: v };
+    if (k === "付款日" && v && !rows[i].方式) rows[i].方式 = "匯款";
+    return { ...p, 收款: rows };
+  });
+  const addPay = () => setF((p) => ({ ...p, 收款: [...(p.收款 || []), blankPay()] }));
+  const delPay = (i) => setF((p) => {
+    const rows = (p.收款 || []).filter((_, k) => k !== i);
+    return { ...p, 收款: rows.length ? rows : [blankPay()] };
   });
 
   /** 包場＝場域內所有可獨立販售的品項一併保留，先幫使用者勾好，仍可調整 */
@@ -1034,6 +1074,58 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
             </p>
           </div>
 
+          <div className="rounded p-3 grid gap-2" style={{ background: C.paper }}>
+            <div className="flex items-baseline justify-between flex-wrap gap-2">
+              <span className="text-xs font-medium">金額與收款（最多 {PAY_MAX} 列）</span>
+              <span className="text-xs tnum" style={{ color: C.sub }}>
+                預估營收 <span style={{ color: C.brand, fontWeight: 600 }}>
+                  NT$ {money(estRevenue(f.收款 || []))}
+                </span>
+                　已收 NT$ {money(paidAmount(f.收款 || []))}
+              </span>
+            </div>
+
+            {(f.收款 || []).map((r, i) => (
+              <div key={i} className="flex gap-2 flex-wrap items-end">
+                <label className="grid gap-1" style={{ flex: "1 1 6rem", minWidth: "5.5rem" }}>
+                  {i === 0 && <span className="text-xs" style={{ color: C.sub }}>類別</span>}
+                  <select value={r.類別} style={inp}
+                    onChange={(e) => setPay(i, "類別", e.target.value)}>
+                    {PAY_KINDS.map((x) => <option key={x}>{x}</option>)}
+                  </select>
+                </label>
+                <label className="grid gap-1" style={{ flex: "1 1 7rem", minWidth: "6rem" }}>
+                  {i === 0 && <span className="text-xs" style={{ color: C.sub }}>金額</span>}
+                  <input type="number" min="0" step="1000" value={r.金額} style={inp}
+                    onChange={(e) => setPay(i, "金額", e.target.value)} />
+                </label>
+                <label className="grid gap-1" style={{ flex: "1 1 8rem", minWidth: "8rem" }}>
+                  {i === 0 && <span className="text-xs" style={{ color: C.sub }}>付款日</span>}
+                  <input type="date" value={r.付款日} style={inp}
+                    onChange={(e) => setPay(i, "付款日", e.target.value)} />
+                </label>
+                <label className="grid gap-1" style={{ flex: "1 1 6rem", minWidth: "5.5rem" }}>
+                  {i === 0 && <span className="text-xs" style={{ color: C.sub }}>付款方式</span>}
+                  <select value={r.方式} style={inp}
+                    onChange={(e) => setPay(i, "方式", e.target.value)}>
+                    <option value="">未收</option>
+                    {PAY_WAYS.map((x) => <option key={x}>{x}</option>)}
+                  </select>
+                </label>
+                <button onClick={() => delPay(i)} className="px-2 py-1.5 text-xs rounded"
+                  style={{ color: C.badText }} aria-label="刪除這一列">移除</button>
+              </div>
+            ))}
+
+            {(f.收款 || []).length < PAY_MAX && (
+              <button onClick={addPay} className="px-3 py-1.5 text-sm rounded self-start"
+                style={{ border: `1px solid ${C.line}` }}>新增一列</button>
+            )}
+            <p className="text-xs" style={{ color: C.sub }}>
+              保證金可退，不計入預估營收。填了付款日才算已收。
+            </p>
+          </div>
+
           <Field label="備註" wide>
             <textarea rows={2} value={f.備註} onChange={(e) => set("備註", e.target.value)} style={inp} />
           </Field>
@@ -1057,6 +1149,8 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
             style={{ border: `1px solid ${C.line}` }}>取消</button>
           <button disabled={errors.length > 0}
             onClick={() => onSubmit({ ...f, 負責窗口: ownerOf(f.業務歸屬),
+              收款: (f.收款 || []).filter((r) => +r.金額 > 0),
+              預估營收: estRevenue(f.收款 || []),
               全票: +f.全票 || 0, 半票: +f.半票 || 0, 免票: +f.免票 || 0, 愛心: +f.愛心 || 0, 餐飲: +f.餐飲 || 0 })}
             className="px-4 py-2 text-sm rounded flex-1"
             style={errors.length
@@ -1087,8 +1181,8 @@ function Field({ label, children, wide }) {
 /* ---------------------------------------------------------------- 任務板 */
 function TaskView({ orders, onMove, onRemove, onEdit, onField }) {
   const [filter, setFilter] = useState("進行中");
-  const live = orders.filter((o) => !["已結案", "流失", "已到訪"].includes(o.狀態));
-  const done = orders.filter((o) => ["已結案", "流失", "已到訪"].includes(o.狀態));
+  const live = orders.filter((o) => !["已結案", "流失", "已到訪"].includes(o.狀態)).sort(byStage);
+  const done = orders.filter((o) => ["已結案", "流失", "已到訪"].includes(o.狀態)).sort(byStage);
   const list = filter === "進行中" ? live : done;
 
   if (!orders.length) {
@@ -1159,6 +1253,14 @@ function TaskCard({ o, onMove, onRemove, onEdit, onField }) {
           <span className="text-xs px-2 py-0.5 rounded" style={{ background: C.paper, color: C.ink }}>
             {o.狀態}
           </span>
+          {+o.預估營收 > 0 && (
+            <div className="text-xs mt-1 tnum" style={{ color: C.ink }}>
+              NT$ {money(o.預估營收)}
+              {paidAmount(payRows(o)) > 0 && (
+                <span style={{ color: C.okText }}>　已收 {money(paidAmount(payRows(o)))}</span>
+              )}
+            </div>
+          )}
           <div className="text-xs mt-1 tnum"
             style={{ color: o.狀態 === "行前作業" ? C.brand : C.okText, fontWeight: 600 }}>
             {stageLabel(o)}
@@ -1350,7 +1452,7 @@ function CalendarAdmin({ cal, onSave, onDelete, say }) {
 function ExportView({ orders, say }) {
   const [busy, setBusy] = useState(false);
 
-  const rows = orders.map((o) => ({
+  const rows = [...orders].sort(byStage).map((o) => ({
     單號: o.單號 || "",
     客戶ID: o.客戶ID, 單位: o.單位,
     業務歸屬: o.業務歸屬 || "", 負責窗口: o.負責窗口 || "",
@@ -1368,6 +1470,12 @@ function ExportView({ orders, say }) {
     派對廳結束: o.PR結束 || "",
     派對方案: o.PR方案 || "",
     狀態: o.狀態, 階段天數: stageLabel(o),
+    預估營收: +o.預估營收 || 0,
+    已收金額: paidAmount(payRows(o)),
+    未收金額: Math.max(0, (+o.預估營收 || 0) - paidAmount(payRows(o))),
+    收款明細: payRows(o).map((r) =>
+      `${r.類別} ${money(r.金額)}${r.付款日 ? ` 於 ${r.付款日}${r.方式 ? " " + r.方式 : ""}` : " 未收"}`
+    ).join("；"),
     建立日: o.建立, 佔用名額: occupies(o) ? "是" : "否",
     備註: o.備註,
   }));
@@ -1422,9 +1530,31 @@ function ExportView({ orders, say }) {
         <button onClick={copy} className="px-4 py-2 text-sm rounded"
           style={{ border: `1px solid ${C.line}` }}>複製表格</button>
       </div>
+      <div className="rounded p-3 mb-3 flex gap-5 flex-wrap tnum"
+        style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <span className="text-sm">
+          <span style={{ color: C.sub }}>預估營收合計　</span>
+          <span style={{ color: C.brand, fontWeight: 600 }}>
+            NT$ {money(rows.reduce((a, r) => a + r.預估營收, 0))}
+          </span>
+        </span>
+        <span className="text-sm">
+          <span style={{ color: C.sub }}>已收　</span>
+          <span style={{ color: C.okText, fontWeight: 600 }}>
+            NT$ {money(rows.reduce((a, r) => a + r.已收金額, 0))}
+          </span>
+        </span>
+        <span className="text-sm">
+          <span style={{ color: C.sub }}>未收　</span>
+          <span style={{ fontWeight: 600 }}>
+            NT$ {money(rows.reduce((a, r) => a + r.未收金額, 0))}
+          </span>
+        </span>
+      </div>
+
       <p className="text-xs mb-3" style={{ color: C.sub }}>
-        兩個分頁：預訂名單是逐筆明細，每日現況是名額結果。欄位對齊行事曆主檔，之後要接營運部票務系統，
-        照他們的匯入規格改欄名就好。
+        依狀態排序，越接近成交的排越前面。兩個分頁：預訂名單是逐筆明細，每日現況是名額結果。
+        之後要接營運部票務系統，照他們的匯入規格改欄名就好。
       </p>
 
       <div className="overflow-x-auto rounded" style={{ border: `1px solid ${C.line}`, background: C.card }}>
