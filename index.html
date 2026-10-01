@@ -117,15 +117,20 @@ const money = (n) => (+n || 0).toLocaleString("zh-TW");
 const PAY_KINDS = ["全額", "訂金", "尾款", "保證金", "其他"];
 const PAY_WAYS = ["匯款", "現金", "支票", "刷卡", "其他"];
 const PAY_MAX = 5;
-const blankPay = () => ({ 類別: "訂金", 金額: "", 付款日: "", 方式: "" });
+const blankPay = () => ({ 類別: "訂金", 金額: "", 預計日: "", 已付: false, 方式: "" });
 
-const payRows = (o) => (Array.isArray(o.收款) ? o.收款 : []);
+/** 讀取時順手把舊格式（付款日＝已付）轉成新格式 */
+const payRows = (o) => (Array.isArray(o.收款) ? o.收款 : []).map((r) => ({
+  ...r,
+  預計日: r.預計日 ?? r.付款日 ?? "",
+  已付: r.已付 ?? !!r.付款日,
+}));
 /** 預估營收＝明細加總，扣掉保證金 */
 const estRevenue = (rows) => rows.reduce(
   (a, r) => a + (r.類別 === "保證金" ? 0 : (+r.金額 || 0)), 0);
-/** 已收＝有填付款日的那幾列 */
+/** 已付＝勾選了已付款的那幾列 */
 const paidAmount = (rows) => rows.reduce(
-  (a, r) => a + (r.付款日 ? (+r.金額 || 0) : 0), 0);
+  (a, r) => a + (r.已付 ? (+r.金額 || 0) : 0), 0);
 
 /** 平假日定義由「行事曆」分頁維護，存在資料庫。沒定義的日期才退回週末判斷。 */
 let CAL = {};
@@ -872,7 +877,7 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
   const setPay = (i, k, v) => setF((p) => {
     const rows = [...(p.收款 || [])];
     rows[i] = { ...rows[i], [k]: v };
-    if (k === "付款日" && v && !rows[i].方式) rows[i].方式 = "匯款";
+    if (k === "已付" && v && !rows[i].方式) rows[i].方式 = "匯款";
     return { ...p, 收款: rows };
   });
   const addPay = () => setF((p) => ({ ...p, 收款: [...(p.收款 || []), blankPay()] }));
@@ -1081,7 +1086,9 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
                 預估營收 <span style={{ color: C.brand, fontWeight: 600 }}>
                   NT$ {money(estRevenue(f.收款 || []))}
                 </span>
-                　已收 NT$ {money(paidAmount(f.收款 || []))}
+                　已付 <span style={{ color: C.okText, fontWeight: 600 }}>
+                  NT$ {money(paidAmount(f.收款 || []))}
+                </span>
               </span>
             </div>
 
@@ -1096,21 +1103,29 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
                 </label>
                 <label className="grid gap-1" style={{ flex: "1 1 7rem", minWidth: "6rem" }}>
                   {i === 0 && <span className="text-xs" style={{ color: C.sub }}>金額</span>}
-                  <input type="number" min="0" step="1000" value={r.金額} style={inp}
-                    onChange={(e) => setPay(i, "金額", e.target.value)} />
+                  <input type="text" inputMode="numeric" value={r.金額 === "" ? "" : money(r.金額)}
+                    className="tnum" style={{ ...inp, textAlign: "right" }}
+                    onChange={(e) => setPay(i, "金額", e.target.value.replace(/[^0-9]/g, ""))} />
                 </label>
                 <label className="grid gap-1" style={{ flex: "1 1 8rem", minWidth: "8rem" }}>
-                  {i === 0 && <span className="text-xs" style={{ color: C.sub }}>付款日</span>}
-                  <input type="date" value={r.付款日} style={inp}
-                    onChange={(e) => setPay(i, "付款日", e.target.value)} />
+                  {i === 0 && <span className="text-xs" style={{ color: C.sub }}>預計付款日</span>}
+                  <input type="date" value={r.預計日} style={inp}
+                    onChange={(e) => setPay(i, "預計日", e.target.value)} />
                 </label>
                 <label className="grid gap-1" style={{ flex: "1 1 6rem", minWidth: "5.5rem" }}>
                   {i === 0 && <span className="text-xs" style={{ color: C.sub }}>付款方式</span>}
                   <select value={r.方式} style={inp}
                     onChange={(e) => setPay(i, "方式", e.target.value)}>
-                    <option value="">未收</option>
+                    <option value="">未指定</option>
                     {PAY_WAYS.map((x) => <option key={x}>{x}</option>)}
                   </select>
+                </label>
+                <label className="flex items-center gap-1.5 pb-2" style={{ flex: "0 0 auto" }}>
+                  <input type="checkbox" checked={!!r.已付}
+                    onChange={(e) => setPay(i, "已付", e.target.checked)}
+                    style={{ width: 16, height: 16, accentColor: C.brand }} />
+                  <span className="text-xs" style={{ color: r.已付 ? C.okText : C.sub,
+                    fontWeight: r.已付 ? 600 : 400 }}>已付款</span>
                 </label>
                 <button onClick={() => delPay(i)} className="px-2 py-1.5 text-xs rounded"
                   style={{ color: C.badText }} aria-label="刪除這一列">移除</button>
@@ -1122,7 +1137,7 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
                 style={{ border: `1px solid ${C.line}` }}>新增一列</button>
             )}
             <p className="text-xs" style={{ color: C.sub }}>
-              保證金可退，不計入預估營收。填了付款日才算已收。
+              保證金可退，不計入預估營收。勾了「已付款」才算已付。
             </p>
           </div>
 
@@ -1257,7 +1272,7 @@ function TaskCard({ o, onMove, onRemove, onEdit, onField }) {
             <div className="text-xs mt-1 tnum" style={{ color: C.ink }}>
               NT$ {money(o.預估營收)}
               {paidAmount(payRows(o)) > 0 && (
-                <span style={{ color: C.okText }}>　已收 {money(paidAmount(payRows(o)))}</span>
+                <span style={{ color: C.okText }}>　已付 {money(paidAmount(payRows(o)))}</span>
               )}
             </div>
           )}
@@ -1449,36 +1464,51 @@ function CalendarAdmin({ cal, onSave, onDelete, say }) {
 }
 
 /* ----------------------------------------------------------------- 匯出 */
+const MONEY_COLS = ["預估總營收", "已付金額", "未付金額"];
+
 function ExportView({ orders, say }) {
   const [busy, setBusy] = useState(false);
 
-  const rows = [...orders].sort(byStage).map((o) => ({
-    單號: o.單號 || "",
-    客戶ID: o.客戶ID, 單位: o.單位,
-    業務歸屬: o.業務歸屬 || "", 負責窗口: o.負責窗口 || "",
-    客群: o.客群, 聯絡人: o.聯絡人, 電話: o.電話,
-    預定日期: o.日期, 日別: isHoliday(o.日期) ? "假日" : "平日",
-    場次: o.包場 ? "包場-" + (o.場次 === "全" ? "全場" : o.場次 + "半場")
-                 : (o.場次 === "全" ? "全場" : o.場次 + "半場"),
-    場次時間: sessionTime(o.日期, o.場次),
-    包場: o.包場 ? "Y" : "N",
-    全票: o.全票, 半票: o.半票, 免票: o.免票, 愛心票: o.愛心, 總人數: headcount(o),
-    餐飲數量: o.餐飲 || 0,
-    劇院數量: o.劇院 || 0,
-    派對廳數量: o.PR廳數 || 0,
-    派對廳開始: o.PR開始 || "",
-    派對廳結束: o.PR結束 || "",
-    派對方案: o.PR方案 || "",
-    狀態: o.狀態, 階段天數: stageLabel(o),
-    預估營收: +o.預估營收 || 0,
-    已收金額: paidAmount(payRows(o)),
-    未收金額: Math.max(0, (+o.預估營收 || 0) - paidAmount(payRows(o))),
-    收款明細: payRows(o).map((r) =>
-      `${r.類別} ${money(r.金額)}${r.付款日 ? ` 於 ${r.付款日}${r.方式 ? " " + r.方式 : ""}` : " 未收"}`
-    ).join("；"),
-    建立日: o.建立, 佔用名額: occupies(o) ? "是" : "否",
-    備註: o.備註,
-  }));
+  const rows = [...orders].sort(byStage).map((o) => {
+    const paid = paidAmount(payRows(o));
+    const est = +o.預估營收 || 0;
+    return {
+      /* 這九欄放最前面，報表打開第一眼就看得完 */
+      業務歸屬: o.業務歸屬 || "",
+      負責人: o.負責窗口 || "",
+      狀態: o.狀態,
+      預定單位: o.單位,
+      預定日期: o.日期,
+      預定總人數: headcount(o),
+      預估總營收: est,
+      已付金額: paid,
+      未付金額: Math.max(0, est - paid),
+
+      單號: o.單號 || "",
+      階段天數: stageLabel(o),
+      客戶ID: o.客戶ID,
+      客群: o.客群, 聯絡人: o.聯絡人, 電話: o.電話,
+      日別: isHoliday(o.日期) ? "假日" : "平日",
+      場次: o.包場 ? "包場-" + (o.場次 === "全" ? "全場" : o.場次 + "半場")
+                   : (o.場次 === "全" ? "全場" : o.場次 + "半場"),
+      場次時間: sessionTime(o.日期, o.場次),
+      包場: o.包場 ? "Y" : "N",
+      全票: o.全票, 半票: o.半票, 免票: o.免票, 愛心票: o.愛心,
+      餐飲數量: o.餐飲 || 0,
+      劇院數量: o.劇院 || 0,
+      派對廳數量: o.PR廳數 || 0,
+      派對廳開始: o.PR開始 || "",
+      派對廳結束: o.PR結束 || "",
+      派對方案: o.PR方案 || "",
+      收款明細: payRows(o).map((r) =>
+        `${r.類別} ${money(r.金額)}${r.已付
+          ? ` 已付${r.方式 ? " " + r.方式 : ""}${r.預計日 ? " " + r.預計日 : ""}`
+          : `${r.預計日 ? ` 預計 ${r.預計日}` : ""} 未付`}`
+      ).join("；"),
+      建立日: o.建立, 佔用名額: occupies(o) ? "是" : "否",
+      備註: o.備註,
+    };
+  });
 
   const daily = useMemo(() => {
     const set = [...new Set(orders.map((o) => o.日期))].sort();
@@ -1535,19 +1565,19 @@ function ExportView({ orders, say }) {
         <span className="text-sm">
           <span style={{ color: C.sub }}>預估營收合計　</span>
           <span style={{ color: C.brand, fontWeight: 600 }}>
-            NT$ {money(rows.reduce((a, r) => a + r.預估營收, 0))}
+            NT$ {money(rows.reduce((a, r) => a + r.預估總營收, 0))}
           </span>
         </span>
         <span className="text-sm">
-          <span style={{ color: C.sub }}>已收　</span>
+          <span style={{ color: C.sub }}>已付　</span>
           <span style={{ color: C.okText, fontWeight: 600 }}>
-            NT$ {money(rows.reduce((a, r) => a + r.已收金額, 0))}
+            NT$ {money(rows.reduce((a, r) => a + r.已付金額, 0))}
           </span>
         </span>
         <span className="text-sm">
-          <span style={{ color: C.sub }}>未收　</span>
+          <span style={{ color: C.sub }}>未付　</span>
           <span style={{ fontWeight: 600 }}>
-            NT$ {money(rows.reduce((a, r) => a + r.未收金額, 0))}
+            NT$ {money(rows.reduce((a, r) => a + r.未付金額, 0))}
           </span>
         </span>
       </div>
@@ -1572,7 +1602,10 @@ function ExportView({ orders, say }) {
               <tr key={i}>
                 {Object.keys(rows[0]).map((h) => (
                   <td key={h} className="px-2 py-1.5 whitespace-nowrap tnum"
-                    style={{ borderBottom: `1px solid ${C.line}` }}>{String(r[h] ?? "")}</td>
+                    style={{ borderBottom: `1px solid ${C.line}`,
+                             textAlign: MONEY_COLS.includes(h) ? "right" : "left" }}>
+                    {MONEY_COLS.includes(h) ? money(r[h]) : String(r[h] ?? "")}
+                  </td>
                 ))}
               </tr>
             ))}
