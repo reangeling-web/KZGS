@@ -470,6 +470,16 @@ function App() {
     await loadCal();
   };
 
+  /** 流失還原：回到檔期暫留，預留天數從今天重新起算 */
+  const restore = async (id) => {
+    const o = orders.find((x) => x.id === id);
+    const log = { ...(o.階段 || {}) };
+    delete log["流失"];
+    log["檔期暫留"] = todayISO();
+    const ok = await patch(id, { status: "檔期暫留", stage_log: log });
+    if (ok) say("已還原為檔期暫留，名額重新佔用");
+  };
+
   const remove = async (id) => {
     const { error } = await sb.from("bookings").delete().eq("id", id);
     if (error) { say(clean(error.message)); return; }
@@ -550,7 +560,8 @@ function App() {
           />
         )}
         {tab === "任務" && admin && (
-          <TaskView orders={orders} onMove={move} onRemove={remove} onEdit={setEditing} onField={setField} />
+          <TaskView orders={orders} onMove={move} onRemove={remove} onEdit={setEditing}
+            onField={setField} onRestore={restore} />
         )}
         {tab === "匯出" && admin && <ExportView orders={orders} say={say} />}
         {tab === "行事曆" && admin && (
@@ -1194,7 +1205,7 @@ function Field({ label, children, wide }) {
 }
 
 /* ---------------------------------------------------------------- 任務板 */
-function TaskView({ orders, onMove, onRemove, onEdit, onField }) {
+function TaskView({ orders, onMove, onRemove, onEdit, onField, onRestore }) {
   const [filter, setFilter] = useState("進行中");
   const live = orders.filter((o) => !["已結案", "流失", "已到訪"].includes(o.狀態)).sort(byStage);
   const done = orders.filter((o) => ["已結案", "流失", "已到訪"].includes(o.狀態)).sort(byStage);
@@ -1228,14 +1239,15 @@ function TaskView({ orders, onMove, onRemove, onEdit, onField }) {
         ? <p className="text-sm" style={{ color: C.sub }}>這一區目前是空的。</p>
         : <ul className="grid gap-2">
             {list.map((o) => (
-              <TaskCard key={o.id} o={o} onMove={onMove} onRemove={onRemove} onEdit={onEdit} onField={onField} />
+              <TaskCard key={o.id} o={o} onMove={onMove} onRemove={onRemove} onEdit={onEdit}
+                onField={onField} onRestore={onRestore} />
             ))}
           </ul>}
     </>
   );
 }
 
-function TaskCard({ o, onMove, onRemove, onEdit, onField }) {
+function TaskCard({ o, onMove, onRemove, onEdit, onField, onRestore }) {
   const idx = FLOW.indexOf(o.狀態);
   const next = idx >= 0 && idx < FLOW.length - 1 ? FLOW[idx + 1] : null;
 
@@ -1294,13 +1306,18 @@ function TaskCard({ o, onMove, onRemove, onEdit, onField }) {
       </label>
 
       <div className="flex gap-2 mt-3 flex-wrap">
-        {next && (
-          <button onClick={() => onMove(o.id, next)} className="px-2.5 py-1 text-xs rounded"
-            style={{ background: C.brand, color: "#fff" }}>推進到「{next}」</button>
-        )}
-        {o.狀態 !== "流失" && (
-          <button onClick={() => onMove(o.id, "流失")} className="px-2.5 py-1 text-xs rounded"
-            style={{ border: `1px solid ${C.line}`, color: C.sub }}>標記流失</button>
+        {o.狀態 === "流失" ? (
+          <button onClick={() => onRestore(o.id)} className="px-2.5 py-1 text-xs rounded"
+            style={{ background: C.gold, color: C.ink }}>還原為檔期暫留</button>
+        ) : (
+          <>
+            {next && (
+              <button onClick={() => onMove(o.id, next)} className="px-2.5 py-1 text-xs rounded"
+                style={{ background: C.brand, color: "#fff" }}>推進到「{next}」</button>
+            )}
+            <button onClick={() => onMove(o.id, "流失")} className="px-2.5 py-1 text-xs rounded"
+              style={{ border: `1px solid ${C.line}`, color: C.sub }}>標記流失</button>
+          </>
         )}
         <button onClick={() => onEdit(o)} className="px-2.5 py-1 text-xs rounded"
           style={{ border: `1px solid ${C.line}` }}>修改內容</button>
