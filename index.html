@@ -96,7 +96,7 @@ const ENABLE_ACTIVITY_QUOTE = true;
 const TABS = ["票務報價動態", "活動報價動態", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v2.3　11/03 18:26";
+const BUILD = "v2.4　11/03 20:05";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -316,7 +316,6 @@ const saveRow = async (t, row) => {
     ? sb.from(t).update(rest).eq("id", id)
     : sb.from(t).insert(rest);
 };
-const PRODUCT_CATS = ["票種", "餐飲", "包廂", "專案", "其他"];
 
 /** 報價時這個業務看得到哪些產品：沒設業務歸屬的大家都看得到，有設的只有被標到的人看得到 */
 const repTags = (rep) => (Array.isArray(rep && rep.tags) ? rep.tags : []);
@@ -741,10 +740,21 @@ function CustomersView({ rows, onSave, say, me }) {
 }
 
 /* ===================================================== 產品建檔 */
+/** 四大類：票務／活動（人種）／餐飲／專案。一個專案在報價單上就是一列，不拆開。 */
+const PRODUCT_KINDS = ["票務", "活動", "餐飲", "專案"];
+const UNIT_OF = { 票務: "張", 活動: "位", 餐飲: "份", 專案: "式" };
+
+/** 逾期兌換手續費只有票務類有：一般票券固定 70 元、墨攻為面額的 10% */
+const LATE_FEES = [["", "無"], ["fixed", "固定金額"], ["percent", "面額百分比"]];
+const lateFeeText = (r) =>
+  r.late_fee_kind === "fixed" ? `逾期 +${money(r.late_fee_value)} 元`
+    : r.late_fee_kind === "percent" ? `逾期 +${r.late_fee_value}%` : "";
+
 const blankProduct = (kind) => ({
   kind, category: kind === "活動" ? "票種" : "", assignment: "", name: "", alias: "",
-  subtitle: "", doc_title: "", list_price: 0, price: 0, unit: kind === "票務" ? "張" : "位",
+  subtitle: "", doc_title: "", list_price: 0, price: 0, unit: UNIT_OF[kind] || "式",
   min_qty: 0, remark: "", terms: "", payment_rule: kind === "票務" ? "ticket" : "activity",
+  late_fee_kind: "", late_fee_value: 0,
   active: true, sort: 0,
 });
 
@@ -755,7 +765,7 @@ function ProductsView({ rows, assignments, onSave, say }) {
   const [busy, setBusy] = useState(false);
   const [newAssign, setNewAssign] = useState("");
   const list = rows.filter((r) => r.kind === kind)
-    .filter((r) => match([r.name, r.alias, r.assignment, r.category], q));
+    .filter((r) => match([r.name, r.alias, r.assignment, r.category, r.kind], q));
 
   const save = async () => {
     if (!edit.name.trim()) return say("填一下產品名稱");
@@ -791,8 +801,8 @@ function ProductsView({ rows, assignments, onSave, say }) {
       onAdd={() => setEdit(blankProduct(kind))}
       right={
         <div className="flex gap-1">
-          {["票務", "活動"].map((k) => (
-            <button key={k} onClick={() => setKind(k)} className="px-3 py-1.5 text-sm rounded"
+          {PRODUCT_KINDS.map((k) => (
+            <button key={k} onClick={() => setKind(k)} className="px-2.5 py-1.5 text-sm rounded"
               style={kind === k ? { background: C.ink, color: C.paper }
                                 : { color: C.sub, border: `1px solid ${C.line}` }}>{k}</button>
           ))}
@@ -814,6 +824,7 @@ function ProductsView({ rows, assignments, onSave, say }) {
                   售價 {money(r.price)} / {r.unit}
                   {r.min_qty > 0 && `　最低 ${r.min_qty}`}
                   {r.assignment && `　${r.assignment}`}
+                  {lateFeeText(r) && `　${lateFeeText(r)}`}
                 </div>
                 {r.doc_title && <div className="text-xs mt-0.5" style={{ color: C.sub }}>
                   報價單標題：{r.doc_title}
@@ -857,17 +868,13 @@ function ProductsView({ rows, assignments, onSave, say }) {
               <select value={edit.kind} style={inp}
                 onChange={(e) => { const v = e.target.value; setEdit({ ...edit, kind: v,
                   category: v === "活動" ? (edit.category || "票種") : "",
+                  unit: UNIT_OF[v] || edit.unit,
+                  late_fee_kind: v === "票務" ? edit.late_fee_kind : "",
+                  late_fee_value: v === "票務" ? edit.late_fee_value : 0,
                   payment_rule: v === "票務" ? "ticket" : "activity" }); }}>
-                <option>票務</option><option>活動</option>
+                {PRODUCT_KINDS.map((x) => <option key={x}>{x}</option>)}
               </select>
             </Field>
-            {edit.kind === "活動" && (
-              <Field label="印在哪個區塊">
-                <select value={edit.category} style={inp} onChange={f("category")}>
-                  {PRODUCT_CATS.map((x) => <option key={x}>{x}</option>)}
-                </select>
-              </Field>
-            )}
             <Field label="業務歸屬">
               <select value={edit.assignment} style={inp} onChange={f("assignment")}>
                 <option value="">未指定</option>
@@ -921,6 +928,21 @@ function ProductsView({ rows, assignments, onSave, say }) {
                 {PAYMENT_RULES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
               </select>
             </Field>
+            {edit.kind === "票務" && (
+              <>
+                <Field label="逾期兌換手續費">
+                  <select value={edit.late_fee_kind || ""} style={inp} onChange={f("late_fee_kind")}>
+                    {LATE_FEES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+                  </select>
+                </Field>
+                {edit.late_fee_kind && (
+                  <Field label={edit.late_fee_kind === "fixed" ? "每張加收（元）" : "加收面額的（%）"}>
+                    <input type="number" value={edit.late_fee_value || 0} style={inp}
+                      onChange={(e) => setEdit({ ...edit, late_fee_value: +e.target.value || 0 })} />
+                  </Field>
+                )}
+              </>
+            )}
             <Field label="排序">
               <input type="number" value={edit.sort} style={inp}
                 onChange={(e) => setEdit({ ...edit, sort: +e.target.value || 0 })} />
