@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>團體檔期｜KidZania Taipei</title>
+<title>團體平台｜KidZania Taipei</title>
 <meta name="theme-color" content="#B02342">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23B02342'/><text x='16' y='23' font-size='19' text-anchor='middle' fill='white' font-family='sans-serif'>K</text></svg>">
 <script src="https://cdn.tailwindcss.com"></script>
@@ -48,21 +48,11 @@ const C = {
 };
 
 const SEGMENTS = ["學校", "企業", "派對", "營隊", "補教", "公益", "夥伴", "旅行社", "員工", "自然人"];
-/** 業務歸屬決定負責窗口，對照寫死，不可在介面上更動 */
-const ASSIGNMENTS = {
-  "pp年度採購": "Angel",
-  "寒暑假營隊": "Angel",
-  "平日公私立學校": "Angel",
-  "平日課後安親班4H": "Angel",
-  "旅行社(公司/寒暑假營隊)": "Lenna",
-  "旅行社(平日公私立學校)": "Lenna",
-  "旅行社(平日5H系列團)": "Lenna",
-  "生日派對/各式派對": "Lenna",
-  "公司團體/國際學校": "Lenna",
-};
-const ownerOf = (a) => ASSIGNMENTS[a] || "";
+/** 業務歸屬、業務窗口、客戶、產品都從資料庫載入，不再寫死 */
+let LISTS = { assignments: [], reps: [], customers: [], products: [] };
+const setLists = (k, v) => { LISTS[k] = v || []; };
+const repName = (id) => (LISTS.reps.find((r) => r.id === id) || {}).name || "";
 
-/** 派對廳：實體 2 廳，起訖時間自由選，系統自動算時間重疊 */
 const PR_ROOMS_AT_ONCE = 2;
 const PR_STEP = 30;                       // 分鐘，時間選單的間隔
 const OPEN_WEEKDAY = ["09:00", "20:00"];  // 平日營業
@@ -99,6 +89,11 @@ function prPeak(list, start, end, qty) {
   const points = [st, ...list.map((o) => toMin(o.PR開始)).filter((pt) => pt > st && pt < en)];
   return Math.max(...points.map((pt) => prUsedAt(list, pt) + qty));
 }
+
+/** 活動報價是過渡功能，未來會卸除；票務報價常駐。改這一行即可關閉活動報價入口。 */
+const ENABLE_ACTIVITY_QUOTE = true;
+
+const TABS = ["票務報價動態", "活動報價動態", "任務", "行事曆", "匯出"];
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -266,6 +261,7 @@ const sb = window.supabase.createClient(SUPA_URL, SUPA_KEY);
 const toApp = (r) => ({
   id: r.id, 單號: r.order_no, 客戶ID: r.customer_code || "", 單位: r.org, 客群: r.segment,
   業務歸屬: r.assignment || "", 負責窗口: r.owner || "",
+  客戶id: r.customer_id || "",
   聯絡人: r.contact || "", 電話: r.phone || "", 日期: r.visit_date, 場次: r.slot, 包場: r.buyout,
   全票: r.full_ticket, 半票: r.half_ticket, 免票: r.free_ticket, 愛心: r.love_ticket,
   餐飲: r.meals, 劇院: r.theater, PR廳數: r.party_rooms, PR方案: r.party_plan || "",
@@ -276,7 +272,7 @@ const toApp = (r) => ({
 
 const DB_MAP = {
   單號: "order_no", 客戶ID: "customer_code", 單位: "org", 客群: "segment",
-  業務歸屬: "assignment", 負責窗口: "owner",
+  業務歸屬: "assignment", 負責窗口: "owner", 客戶id: "customer_id",
   聯絡人: "contact", 電話: "phone", 日期: "visit_date", 場次: "slot",
   全票: "full_ticket", 半票: "half_ticket", 免票: "free_ticket", 愛心: "love_ticket",
   餐飲: "meals", 劇院: "theater", PR廳數: "party_rooms", PR方案: "party_plan",
@@ -293,10 +289,32 @@ const toDb = (o) => {
     if (d[n] !== undefined) d[n] = +d[n] || 0;
   if (d.est_revenue !== undefined) d.est_revenue = +d.est_revenue || 0;
   if (d.hold_until === "") d.hold_until = null;
+  if (d.customer_id === "") d.customer_id = null;
+  /* 業務窗口存名字（舊平台看得懂），同時補上對應的 rep_id */
+  if (d.owner !== undefined) {
+    const r = LISTS.reps.find((x) => x.name === d.owner);
+    d.rep_id = r ? r.id : null;
+  }
   return d;
 };
 
 const clean = (m) => String(m || "").replace(/^.*?:\s*/, "");
+
+/* ---- 建檔資料的共用讀寫 ---- */
+const loadTable = async (t, order) => {
+  const q = sb.from(t).select("*");
+  const { data, error } = order ? await q.order(order) : await q;
+  if (error) { console.warn(t, error.message); return []; }
+  return data || [];
+};
+const saveRow = async (t, row) => {
+  const { id, ...rest } = row;
+  return id
+    ? sb.from(t).update(rest).eq("id", id)
+    : sb.from(t).insert(rest);
+};
+const PRODUCT_CATS = ["票種", "餐飲", "包廂", "專案", "其他"];
+const PAYMENT_RULES = [["activity", "活動（訂金／尾款）"], ["ticket", "票務（全額）"]];
 
 /** 預覽權限拿到的是去識別化的逐筆資料：只有單號與人數，沒有單位與聯絡方式 */
 const toGuest = (r) => ({
@@ -359,12 +377,527 @@ function LoginPage({ onGuest }) {
   );
 }
 
+/* ===================================================== 建檔頁共用元件 */
+function Modal({ title, onClose, onSave, saveLabel = "儲存", wide, children, busy }) {
+  return (
+    <div className="fixed inset-0 z-30 flex items-start justify-center p-4 overflow-y-auto"
+      style={{ background: "rgba(36,26,28,.45)" }} onClick={onClose}>
+      <div className="rounded my-6" onClick={(e) => e.stopPropagation()}
+        style={{ background: C.card, width: "100%", maxWidth: wide ? 760 : 520 }}>
+        <div className="px-4 py-3 flex items-center justify-between"
+          style={{ borderBottom: `1px solid ${C.line}` }}>
+          <h2 className="font-semibold">{title}</h2>
+          <button onClick={onClose} className="text-xl leading-none px-2"
+            style={{ color: C.sub }}>×</button>
+        </div>
+        <div className="p-4 grid gap-3">{children}</div>
+        <div className="px-4 py-3 flex gap-2" style={{ borderTop: `1px solid ${C.line}` }}>
+          <button onClick={onClose} className="px-4 py-2 text-sm rounded flex-1"
+            style={{ border: `1px solid ${C.line}` }}>取消</button>
+          <button onClick={onSave} disabled={busy} className="px-4 py-2 text-sm rounded flex-1"
+            style={{ background: C.brand, color: "#fff" }}>{busy ? "儲存中…" : saveLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MasterShell({ title, hint, q, setQ, onAdd, addLabel, right, children }) {
+  return (
+    <>
+      <div className="flex items-baseline justify-between flex-wrap gap-2 mb-3">
+        <div>
+          <h2 className="text-lg font-semibold">{title}</h2>
+          {hint && <p className="text-xs mt-0.5" style={{ color: C.sub }}>{hint}</p>}
+        </div>
+        <div className="flex gap-2 items-center">{right}</div>
+      </div>
+      <div className="flex gap-2 mb-3 flex-wrap">
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜尋"
+          style={{ ...inp, maxWidth: 260 }} />
+        <button onClick={onAdd} className="px-3 py-2 text-sm rounded whitespace-nowrap"
+          style={{ background: C.brand, color: "#fff" }}>{addLabel}</button>
+      </div>
+      {children}
+    </>
+  );
+}
+
+const Pill = ({ on, children }) => (
+  <span className="text-xs px-2 py-0.5 rounded whitespace-nowrap"
+    style={on ? { background: C.okBg, color: C.okText } : { background: C.paper, color: C.sub }}>
+    {children}
+  </span>
+);
+
+function RowCard({ children, dim }) {
+  return (
+    <li className="rounded p-3" style={{
+      background: C.card, border: `1px solid ${C.line}`, opacity: dim ? .55 : 1,
+    }}>{children}</li>
+  );
+}
+
+const match = (hay, q) =>
+  !q.trim() || hay.filter(Boolean).join(" ").toLowerCase().includes(q.trim().toLowerCase());
+
+/* ===================================================== 首頁 */
+function HomeView({ me, onGo }) {
+  const cards = [
+    { k: "業務建檔", d: "維護業務與業助名單，決定報價單上可以選到誰", go: "業務建檔" },
+    { k: "客戶建檔", d: "單位、統編、聯絡方式，建過一次以後下拉就選得到", go: "客戶建檔" },
+    { k: "產品建檔", d: "票務與活動的品項、價格、備註與注意事項", go: "產品建檔" },
+  ];
+  return (
+    <>
+      <div className="rounded p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <p className="text-sm">
+          {me ? <>你好，<span style={{ fontWeight: 600 }}>{me.name}</span>　{me.title}</>
+              : <span style={{ color: C.badText }}>
+                  此帳號尚未在業務建檔中登記，請聯絡主管。目前只能查看活動報價動態。
+                </span>}
+        </p>
+      </div>
+
+      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))" }}>
+        {cards.map((c) => (
+          <button key={c.k} onClick={() => onGo(c.go)} className="rounded p-4 text-left"
+            style={{ background: C.card, border: `1px solid ${C.line}` }}>
+            <div className="font-semibold">{c.k}</div>
+            <div className="text-xs mt-1" style={{ color: C.sub }}>{c.d}</div>
+          </button>
+        ))}
+
+        <div className="rounded p-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+          <div className="font-semibold">需求建檔</div>
+          <div className="text-xs mt-1 mb-3" style={{ color: C.sub }}>
+            票務直接開報價；活動先到月曆登記檔期
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => onGo("票務")} className="px-3 py-1.5 text-sm rounded flex-1"
+              style={{ background: C.brand, color: "#fff" }}>票務</button>
+            {ENABLE_ACTIVITY_QUOTE && (
+              <button onClick={() => onGo("活動")} className="px-3 py-1.5 text-sm rounded flex-1"
+                style={{ border: `1px solid ${C.brand}`, color: C.brand }}>活動</button>
+            )}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* ===================================================== 業務建檔 */
+const blankRep = () => ({ name: "", title: "", ext: "", mobile: "", email: "", role: "業務", active: true, sort: 0 });
+
+function RepsView({ rows, onSave, say }) {
+  const [q, setQ] = useState("");
+  const [edit, setEdit] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const list = rows.filter((r) => match([r.name, r.title, r.email, r.ext, r.mobile], q));
+
+  const save = async () => {
+    if (!edit.name.trim()) return say("填一下姓名");
+    if (!edit.email.trim()) return say("Email 要填，這同時是登入帳號");
+    setBusy(true);
+    const { error } = await saveRow("sales_reps", edit);
+    setBusy(false);
+    if (error) return say(clean(error.message));
+    setEdit(null); say("已儲存"); onSave();
+  };
+
+  return (
+    <MasterShell title="業務建檔" q={q} setQ={setQ} addLabel="新增業務"
+      hint="Email 同時是平台登入帳號。停用的人不會出現在報價單的下拉選單，但舊報價仍然看得到。"
+      onAdd={() => setEdit(blankRep())}>
+      <ul className="grid gap-2">
+        {list.map((r) => (
+          <RowCard key={r.id} dim={!r.active}>
+            <div className="flex justify-between gap-3 flex-wrap">
+              <div>
+                <div className="font-medium">
+                  {r.name}
+                  <span className="ml-2 text-xs font-normal" style={{ color: C.sub }}>{r.title}</span>
+                </div>
+                <div className="text-xs mt-0.5 tnum" style={{ color: C.sub }}>
+                  {r.email}　分機 {r.ext || "—"}　{r.mobile}
+                </div>
+              </div>
+              <div className="flex items-start gap-2">
+                <Pill on={r.active}>{r.active ? "在職" : "停用"}</Pill>
+                <button onClick={() => setEdit({ ...r })} className="px-2.5 py-1 text-xs rounded"
+                  style={{ border: `1px solid ${C.line}` }}>編輯</button>
+              </div>
+            </div>
+          </RowCard>
+        ))}
+        {list.length === 0 && <p className="text-sm" style={{ color: C.sub }}>沒有符合的資料。</p>}
+      </ul>
+
+      {edit && (
+        <Modal title={edit.id ? "編輯業務" : "新增業務"} busy={busy}
+          onClose={() => setEdit(null)} onSave={save}>
+          <Row>
+            <Field label="姓名">
+              <input value={edit.name} style={inp}
+                onChange={(e) => setEdit({ ...edit, name: e.target.value })} />
+            </Field>
+            <Field label="職稱">
+              <input value={edit.title} style={inp} placeholder="例：業務專員"
+                onChange={(e) => setEdit({ ...edit, title: e.target.value })} />
+            </Field>
+          </Row>
+          <Field label="Email（登入帳號）" wide>
+            <input value={edit.email} style={inp} autoComplete="off"
+              onChange={(e) => setEdit({ ...edit, email: e.target.value.trim() })} />
+          </Field>
+          <Row>
+            <Field label="分機">
+              <input value={edit.ext} style={inp} placeholder="118"
+                onChange={(e) => setEdit({ ...edit, ext: e.target.value })} />
+            </Field>
+            <Field label="手機">
+              <input value={edit.mobile} style={inp}
+                onChange={(e) => setEdit({ ...edit, mobile: e.target.value })} />
+            </Field>
+            <Field label="排序">
+              <input type="number" value={edit.sort} style={inp}
+                onChange={(e) => setEdit({ ...edit, sort: +e.target.value || 0 })} />
+            </Field>
+          </Row>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={!!edit.active} style={{ width: 16, height: 16, accentColor: C.brand }}
+              onChange={(e) => setEdit({ ...edit, active: e.target.checked })} />
+            <span className="text-sm">在職（取消勾選＝停用，不會出現在下拉選單）</span>
+          </label>
+          <p className="text-xs" style={{ color: C.sub }}>
+            電話在報價單上會印成 02-2786-6968 #{edit.ext || "分機"}。
+          </p>
+        </Modal>
+      )}
+    </MasterShell>
+  );
+}
+
+/* ===================================================== 客戶建檔 */
+const blankCustomer = () => ({
+  org: "", segment: "學校", tax_id: "", invoice_title: "", dept: "",
+  contact: "", phone: "", mobile: "", email: "", address: "", note: "", active: true,
+});
+
+function CustomerForm({ edit, setEdit }) {
+  const f = (k) => (e) => setEdit({ ...edit, [k]: e.target.value });
+  return (
+    <>
+      <Row>
+        <Field label="單位名稱" wide>
+          <input value={edit.org} style={inp} placeholder="例：新北市土城區清水國小"
+            onChange={f("org")} />
+        </Field>
+      </Row>
+      <Row>
+        <Field label="客群">
+          <select value={edit.segment} style={inp} onChange={f("segment")}>
+            {SEGMENTS.map((x) => <option key={x}>{x}</option>)}
+          </select>
+        </Field>
+        <Field label="統編">
+          <input value={edit.tax_id} style={inp} className="tnum" onChange={f("tax_id")} />
+        </Field>
+        <Field label="部門">
+          <input value={edit.dept} style={inp} onChange={f("dept")} />
+        </Field>
+      </Row>
+      <Field label="發票／收據抬頭" wide>
+        <input value={edit.invoice_title} style={inp} placeholder="留空就用單位名稱"
+          onChange={f("invoice_title")} />
+      </Field>
+      <Row>
+        <Field label="聯絡人">
+          <input value={edit.contact} style={inp} onChange={f("contact")} />
+        </Field>
+        <Field label="電話">
+          <input value={edit.phone} style={inp} onChange={f("phone")} />
+        </Field>
+        <Field label="手機">
+          <input value={edit.mobile} style={inp} onChange={f("mobile")} />
+        </Field>
+      </Row>
+      <Field label="Email" wide>
+        <input value={edit.email} style={inp} onChange={f("email")} />
+      </Field>
+      <Field label="寄送地址" wide>
+        <input value={edit.address} style={inp} onChange={f("address")} />
+      </Field>
+      <Field label="備註" wide>
+        <textarea rows={2} value={edit.note} style={inp} onChange={f("note")} />
+      </Field>
+    </>
+  );
+}
+
+function CustomersView({ rows, onSave, say, me }) {
+  const [q, setQ] = useState("");
+  const [edit, setEdit] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const list = rows.filter((r) => match([r.org, r.tax_id, r.contact, r.phone, r.mobile, r.email], q));
+
+  const save = async () => {
+    if (!edit.org.trim()) return say("填一下單位名稱");
+    const dupe = rows.find((r) => r.id !== edit.id &&
+      (r.org.trim() === edit.org.trim() || (edit.tax_id && r.tax_id === edit.tax_id)));
+    if (dupe && !edit._confirmed) {
+      setEdit({ ...edit, _confirmed: true });
+      return say(`已有「${dupe.org}」單位名稱或統編相同，確定要新增就再按一次儲存`);
+    }
+    setBusy(true);
+    const { _confirmed, ...row } = edit;
+    const { error } = await saveRow("customers",
+      row.id ? { ...row, updated_at: new Date().toISOString() }
+             : { ...row, created_by: me?.name || "" });
+    setBusy(false);
+    if (error) return say(clean(error.message));
+    setEdit(null); say("已儲存"); onSave();
+  };
+
+  return (
+    <MasterShell title="客戶建檔" q={q} setQ={setQ} addLabel="新增客戶"
+      hint="建過一次之後，登記需求和報價時就能直接下拉選取，資料自動帶入。"
+      onAdd={() => setEdit(blankCustomer())}>
+      <ul className="grid gap-2">
+        {list.map((r) => (
+          <RowCard key={r.id} dim={!r.active}>
+            <div className="flex justify-between gap-3 flex-wrap">
+              <div>
+                <div className="font-medium">{r.org}</div>
+                <div className="text-xs mt-0.5 tnum" style={{ color: C.sub }}>
+                  {r.segment}{r.tax_id && `　統編 ${r.tax_id}`}
+                  {r.contact && `　${r.contact}`}{r.phone && `　${r.phone}`}{r.mobile && `　${r.mobile}`}
+                </div>
+              </div>
+              <button onClick={() => setEdit({ ...r })} className="px-2.5 py-1 text-xs rounded h-fit"
+                style={{ border: `1px solid ${C.line}` }}>編輯</button>
+            </div>
+          </RowCard>
+        ))}
+        {list.length === 0 && <p className="text-sm" style={{ color: C.sub }}>沒有符合的資料。</p>}
+      </ul>
+
+      {edit && (
+        <Modal title={edit.id ? "編輯客戶" : "新增客戶"} busy={busy} wide
+          onClose={() => setEdit(null)} onSave={save}>
+          <CustomerForm edit={edit} setEdit={setEdit} />
+        </Modal>
+      )}
+    </MasterShell>
+  );
+}
+
+/* ===================================================== 產品建檔 */
+const blankProduct = (kind) => ({
+  kind, category: kind === "活動" ? "票種" : "", assignment: "", name: "", alias: "",
+  subtitle: "", doc_title: "", list_price: 0, price: 0, unit: kind === "票務" ? "張" : "位",
+  min_qty: 0, remark: "", terms: "", payment_rule: kind === "票務" ? "ticket" : "activity",
+  active: true, sort: 0,
+});
+
+function ProductsView({ rows, assignments, onSave, say }) {
+  const [kind, setKind] = useState("票務");
+  const [q, setQ] = useState("");
+  const [edit, setEdit] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [newAssign, setNewAssign] = useState("");
+  const list = rows.filter((r) => r.kind === kind)
+    .filter((r) => match([r.name, r.alias, r.assignment, r.category], q));
+
+  const save = async () => {
+    if (!edit.name.trim()) return say("填一下產品名稱");
+    setBusy(true);
+    const { error } = await saveRow("products",
+      { ...edit, updated_at: new Date().toISOString() });
+    setBusy(false);
+    if (error) return say(clean(error.message));
+    setEdit(null); say("已儲存"); onSave();
+  };
+
+  const addAssignment = async () => {
+    const name = newAssign.trim();
+    if (!name) return;
+    const { error } = await sb.from("assignments").insert({ name, sort: 999 });
+    if (error) return say(clean(error.message));
+    setNewAssign(""); say(`已新增業務歸屬「${name}」`); onSave();
+  };
+
+  const f = (k) => (e) => setEdit({ ...edit, [k]: e.target.value });
+
+  return (
+    <MasterShell title="產品建檔" q={q} setQ={setQ} addLabel="新增產品"
+      hint="選了產品，報價單會自動帶出名稱、說明、價格、備註與注意事項；帶出來之後還可以在那張報價上改。"
+      onAdd={() => setEdit(blankProduct(kind))}
+      right={
+        <div className="flex gap-1">
+          {["票務", "活動"].map((k) => (
+            <button key={k} onClick={() => setKind(k)} className="px-3 py-1.5 text-sm rounded"
+              style={kind === k ? { background: C.ink, color: C.paper }
+                                : { color: C.sub, border: `1px solid ${C.line}` }}>{k}</button>
+          ))}
+        </div>
+      }>
+      <ul className="grid gap-2">
+        {list.map((r) => (
+          <RowCard key={r.id} dim={!r.active}>
+            <div className="flex justify-between gap-3 flex-wrap">
+              <div>
+                <div className="font-medium">
+                  {r.name}
+                  {r.alias && <span className="ml-2 text-xs font-normal"
+                    style={{ color: C.brand }}>（{r.alias}）</span>}
+                </div>
+                <div className="text-xs mt-0.5 tnum" style={{ color: C.sub }}>
+                  {r.category && `${r.category}　`}
+                  {r.list_price > 0 && `原價 ${money(r.list_price)}　`}
+                  售價 {money(r.price)} / {r.unit}
+                  {r.min_qty > 0 && `　最低 ${r.min_qty}`}
+                  {r.assignment && `　${r.assignment}`}
+                </div>
+                {r.doc_title && <div className="text-xs mt-0.5" style={{ color: C.sub }}>
+                  報價單標題：{r.doc_title}
+                </div>}
+              </div>
+              <div className="flex items-start gap-2">
+                <Pill on={r.active}>{r.active ? "上架" : "下架"}</Pill>
+                <button onClick={() => setEdit({ ...r })} className="px-2.5 py-1 text-xs rounded"
+                  style={{ border: `1px solid ${C.line}` }}>編輯</button>
+              </div>
+            </div>
+          </RowCard>
+        ))}
+        {list.length === 0 && <p className="text-sm" style={{ color: C.sub }}>沒有符合的資料。</p>}
+      </ul>
+
+      <div className="rounded p-3 mt-4" style={{ background: C.paper }}>
+        <p className="text-xs font-medium mb-2">業務歸屬清單</p>
+        <div className="flex gap-1.5 flex-wrap mb-2">
+          {assignments.map((a) => (
+            <span key={a.id} className="text-xs px-2 py-1 rounded"
+              style={{ background: C.card, border: `1px solid ${C.line}` }}>{a.name}</span>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <input value={newAssign} onChange={(e) => setNewAssign(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addAssignment()}
+            placeholder="新增一條業務歸屬" style={{ ...inp, maxWidth: 240 }} />
+          <button onClick={addAssignment} className="px-3 py-2 text-sm rounded"
+            style={{ border: `1px solid ${C.line}` }}>新增</button>
+        </div>
+      </div>
+
+      {edit && (
+        <Modal title={edit.id ? "編輯產品" : `新增${edit.kind}產品`} busy={busy} wide
+          onClose={() => setEdit(null)} onSave={save}>
+          <Row>
+            <Field label="類別">
+              <select value={edit.kind} style={inp}
+                onChange={(e) => { const v = e.target.value; setEdit({ ...edit, kind: v,
+                  category: v === "活動" ? (edit.category || "票種") : "",
+                  payment_rule: v === "票務" ? "ticket" : "activity" }); }}>
+                <option>票務</option><option>活動</option>
+              </select>
+            </Field>
+            {edit.kind === "活動" && (
+              <Field label="印在哪個區塊">
+                <select value={edit.category} style={inp} onChange={f("category")}>
+                  {PRODUCT_CATS.map((x) => <option key={x}>{x}</option>)}
+                </select>
+              </Field>
+            )}
+            <Field label="業務歸屬">
+              <select value={edit.assignment} style={inp} onChange={f("assignment")}>
+                <option value="">未指定</option>
+                {assignments.map((a) => <option key={a.id}>{a.name}</option>)}
+              </select>
+            </Field>
+          </Row>
+
+          <Field label="產品名稱（印在報價單上）" wide>
+            <input value={edit.name} style={inp} onChange={f("name")} />
+          </Field>
+          <Field label="內部名稱（只在系統內顯示，可搜尋）" wide>
+            <input value={edit.alias} style={inp} placeholder="例：PP 優惠票" onChange={f("alias")} />
+          </Field>
+          <Field label="產品說明（印在名稱下方）" wide>
+            <textarea rows={2} value={edit.subtitle} style={inp} onChange={f("subtitle")} />
+          </Field>
+          <Field label="報價單標題" wide>
+            <input value={edit.doc_title} style={inp} onChange={f("doc_title")}
+              placeholder={edit.kind === "票務" ? "KidZania Taipei 票券報價單" : "KidZania Taipei 團體報價單"} />
+          </Field>
+
+          <Row>
+            <Field label="原價／面額">
+              <input type="number" value={edit.list_price} style={inp}
+                onChange={(e) => setEdit({ ...edit, list_price: +e.target.value || 0 })} />
+            </Field>
+            <Field label="預設售價">
+              <input type="number" value={edit.price} style={inp}
+                onChange={(e) => setEdit({ ...edit, price: +e.target.value || 0 })} />
+            </Field>
+            <Field label="單位">
+              <input value={edit.unit} style={inp} onChange={f("unit")} />
+            </Field>
+            <Field label="最低訂購量">
+              <input type="number" value={edit.min_qty} style={inp}
+                onChange={(e) => setEdit({ ...edit, min_qty: +e.target.value || 0 })} />
+            </Field>
+          </Row>
+
+          <Field label="預設備註（印在明細列的備註欄）" wide>
+            <textarea rows={3} value={edit.remark} style={inp} onChange={f("remark")} />
+          </Field>
+          <Field label="預設注意事項／使用規範（印在報價單下方）" wide>
+            <textarea rows={5} value={edit.terms} style={inp} onChange={f("terms")} />
+          </Field>
+
+          <Row>
+            <Field label="付款規範">
+              <select value={edit.payment_rule} style={inp} onChange={f("payment_rule")}>
+                {PAYMENT_RULES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}
+              </select>
+            </Field>
+            <Field label="排序">
+              <input type="number" value={edit.sort} style={inp}
+                onChange={(e) => setEdit({ ...edit, sort: +e.target.value || 0 })} />
+            </Field>
+          </Row>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={!!edit.active} style={{ width: 16, height: 16, accentColor: C.brand }}
+              onChange={(e) => setEdit({ ...edit, active: e.target.checked })} />
+            <span className="text-sm">上架（取消勾選＝下架，不會出現在報價的產品選單）</span>
+          </label>
+        </Modal>
+      )}
+    </MasterShell>
+  );
+}
+
+/* ===================================================== 票務報價動態（第 3 階段） */
+function TicketQuoteView() {
+  return (
+    <div className="rounded p-8 text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
+      <p className="font-medium">票務報價動態</p>
+      <p className="text-sm mt-1" style={{ color: C.sub }}>
+        第 3 階段提供。屆時這裡會列出所有票務報價，可依業務窗口、狀態、月份篩選。
+      </p>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ App */
 function App() {
   const [session, setSession] = useState(undefined);   // undefined = 還在確認
   const [orders, setOrders] = useState([]);
   const [loaded, setLoaded] = useState(false);
-  const [tab, setTab] = useState("檔期");
+  const [tab, setTab] = useState("首頁");
   const [cursor, setCursor] = useState({ y: 2026, m: 12 });
   const [picked, setPicked] = useState(null);
   const [formOpen, setFormOpen] = useState(false);
@@ -375,8 +908,15 @@ function App() {
   const say = (m) => { setToast(m); setTimeout(() => setToast(null), 3200); };
   const [guestMode, setGuestMode] = useState(false);
   const [cal, setCal] = useState([]);
+  const [reps, setReps] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [assigns, setAssigns] = useState([]);
+  const [masterLoaded, setMasterLoaded] = useState(false);
   const guest = !session;
   const admin = !guest;
+  const signedIn = !!session;
+  useEffect(() => { setTab(signedIn ? "首頁" : "活動報價動態"); }, [signedIn]);
 
   const loadCal = async () => {
     const { data } = await sb.from("calendar_days").select("*").order("day");
@@ -385,6 +925,28 @@ function App() {
     setCalendarMap(m); CAL_NOTE = n; setCal(data || []);
   };
   useEffect(() => { loadCal(); }, []);
+
+  /* 建檔資料：業務、客戶、產品、業務歸屬 */
+  const loadMaster = async () => {
+    const [r, c, pr, a] = await Promise.all([
+      loadTable("sales_reps", "sort"),
+      loadTable("customers", "org"),
+      loadTable("products", "sort"),
+      loadTable("assignments", "sort"),
+    ]);
+    setReps(r); setCustomers(c); setProducts(pr); setAssigns(a);
+    setLists("reps", r); setLists("customers", c);
+    setLists("products", pr); setLists("assignments", a);
+    setMasterLoaded(true);
+  };
+  useEffect(() => { if (session) loadMaster(); }, [session]);
+
+  const me = session
+    ? reps.find((r) => (r.email || "").toLowerCase() === (session.user.email || "").toLowerCase())
+    : null;
+  /* 還沒登記在業務建檔的帳號只能看活動報價動態 */
+  const registered = !masterLoaded || !!me;
+  const myTabs = registered ? TABS : ["活動報價動態"];
 
   useEffect(() => {
     sb.auth.getSession().then(({ data }) => setSession(data.session));
@@ -499,15 +1061,15 @@ function App() {
         <div className="max-w-5xl mx-auto">
           <div className="flex items-baseline justify-between flex-wrap gap-2">
             <div>
-              <h1 className="text-xl font-semibold tracking-tight">團體檔期</h1>
+              <h1 className="text-xl font-semibold tracking-tight">團體平台</h1>
               <p className="text-xs mt-1" style={{ color: C.sub }}>
                 {guest
                   ? "預覽權限　可查看檔期與各團人數，不顯示預約單位"
                   : `全票上限 ${CAP_CHILD} 位・同時容留 ${CAP_TOTAL} 位・包場當日不再對外開放`}
               </p>
             </div>
-            <nav className="flex gap-1 items-center">
-              {(guest ? ["檔期"] : ["檔期", "任務", "匯出", "行事曆"]).map((t) => (
+            <nav className="flex gap-1 items-center flex-wrap">
+              {(guest ? ["活動報價動態"] : myTabs).map((t) => (
                 <button key={t} onClick={() => setTab(t)} className="px-3 py-1.5 text-sm rounded"
                   style={tab === t
                     ? { background: C.brand, color: "#fff" }
@@ -520,9 +1082,15 @@ function App() {
                   className="ml-1 px-3 py-1.5 text-sm rounded"
                   style={{ background: C.brand, color: "#fff" }}>登入</button>
               ) : (
-                <button onClick={() => sb.auth.signOut()}
-                  className="ml-1 px-2.5 py-1.5 text-xs rounded"
-                  style={{ border: `1px solid ${C.line}`, color: C.sub }}>登出</button>
+                <>
+                  <button onClick={() => setTab("首頁")} className="ml-1 px-2.5 py-1.5 text-xs rounded"
+                    style={tab === "首頁"
+                      ? { border: `1px solid ${C.brand}`, color: C.brand }
+                      : { border: `1px solid ${C.line}`, color: C.sub }}>首頁</button>
+                  <button onClick={() => sb.auth.signOut()}
+                    className="px-2.5 py-1.5 text-xs rounded"
+                    style={{ border: `1px solid ${C.line}`, color: C.sub }}>登出</button>
+                </>
               )}
             </nav>
           </div>
@@ -552,7 +1120,15 @@ function App() {
             </div>
           </div>
         )}
-        {tab === "檔期" && (
+        {tab === "首頁" && admin && (
+          <HomeView me={me} onGo={(k) => {
+            if (k === "票務") setTab("票務報價動態");
+            else if (k === "活動") setTab("活動報價動態");
+            else setTab(k);
+          }} />
+        )}
+        {tab === "票務報價動態" && admin && registered && <TicketQuoteView />}
+        {tab === "活動報價動態" && (
           <CalendarView
             getDay={getDay} cursor={cursor} setCursor={setCursor}
             picked={picked} setPicked={setPicked} admin={admin} guest={guest}
@@ -563,14 +1139,26 @@ function App() {
           <TaskView orders={orders} onMove={move} onRemove={remove} onEdit={setEditing}
             onField={setField} onRestore={restore} />
         )}
-        {tab === "匯出" && admin && <ExportView orders={orders} say={say} />}
         {tab === "行事曆" && admin && (
           <CalendarAdmin cal={cal} onSave={saveCal} onDelete={delCal} say={say} />
+        )}
+        {tab === "匯出" && admin && <ExportView orders={orders} say={say} />}
+
+        {tab === "業務建檔" && admin && registered && (
+          <RepsView rows={reps} onSave={loadMaster} say={say} />
+        )}
+        {tab === "客戶建檔" && admin && registered && (
+          <CustomersView rows={customers} onSave={loadMaster} say={say} me={me} />
+        )}
+        {tab === "產品建檔" && admin && registered && (
+          <ProductsView rows={products} assignments={assigns} onSave={loadMaster} say={say} />
         )}
 
         {(formOpen || editing) && (
           <RequestForm
             date={picked} orders={orders} editing={editing}
+            customers={customers} reps={reps} assigns={assigns} me={me}
+            onCustomerSaved={loadMaster} say={say}
             onClose={() => { setFormOpen(false); setEditing(null); }}
             onSubmit={editing ? updateOrder : addOrder}
           />
@@ -867,11 +1455,15 @@ function Slot({ name, time, left, booked, child, other, note, lock, guest }) {
 }
 
 /* ------------------------------------------------------------ 需求登記 */
-function RequestForm({ date, orders, editing, onClose, onSubmit }) {
+function RequestForm({ date, orders, editing, onClose, onSubmit,
+                      customers = [], reps = [], assigns = [], me, onCustomerSaved, say }) {
+  const [newCust, setNewCust] = useState(null);
   const [f, setF] = useState(() => editing
-    ? { ...editing, 收款: payRows(editing).length ? payRows(editing) : [blankPay()] }
+    ? { ...editing, 業務窗口: editing.業務窗口 || editing.負責窗口 || "",
+        收款: payRows(editing).length ? payRows(editing) : [blankPay()] }
     : {
-    單位: "", 客群: "學校", 業務歸屬: "", 聯絡人: "", 電話: "",
+    客戶id: "", 單位: "", 客群: "學校", 業務歸屬: "",
+    業務窗口: (me && me.name) || "", 聯絡人: "", 電話: "",
     日期: date || todayISO(), 包場: false, 場次: isHoliday(date || todayISO()) ? "上" : "全",
     全票: "", 半票: "", 免票: "", 愛心: "",
     餐飲: 0, 劇院: 0, PR廳數: 0, PR開始: "", PR結束: "", PR方案: "",
@@ -884,6 +1476,27 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
     if (n.PR結束 && n.PR開始 && toMin(n.PR結束) <= toMin(n.PR開始)) n.PR結束 = "";
     return n;
   });
+
+  /** 選客戶：帶入單位、客群、聯絡人、電話，帶入後仍可自行修改 */
+  const pickCustomer = (id) => {
+    const c = customers.find((x) => x.id === id);
+    setF((p) => !c
+      ? { ...p, 客戶id: "" }
+      : { ...p, 客戶id: id, 單位: c.org, 客群: c.segment || p.客群,
+          聯絡人: c.contact || p.聯絡人, 電話: c.phone || c.mobile || p.電話 });
+  };
+
+  /** 表單裡直接建一筆新客戶，存完自動選起來 */
+  const saveNewCustomer = async () => {
+    if (!newCust.org.trim()) return say && say("填一下單位名稱");
+    const { data, error } = await sb.from("customers")
+      .insert({ ...newCust, created_by: (me && me.name) || "" }).select().single();
+    if (error) return say && say(clean(error.message));
+    await (onCustomerSaved ? onCustomerSaved() : Promise.resolve());
+    setF((p) => ({ ...p, 客戶id: data.id, 單位: data.org, 客群: data.segment || p.客群,
+                   聯絡人: data.contact || p.聯絡人, 電話: data.phone || data.mobile || p.電話 }));
+    setNewCust(null); say && say("客戶已建立並帶入");
+  };
 
   const setPay = (i, k, v) => setF((p) => {
     const rows = [...(p.收款 || [])];
@@ -916,7 +1529,8 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
   if (!f.單位.trim()) errors.push("填一下單位名稱");
   if (!f.包場 && f.場次 === "全" && isHoliday(f.日期))
     errors.push("假日強迫清場，全場僅開放包場。請改選上半場或下半場");
-  if (!f.業務歸屬) errors.push("選一個業務歸屬，負責窗口會自動帶出");
+  if (!f.業務窗口) errors.push("選一個業務窗口");
+  if (!f.業務歸屬) errors.push("選一個業務歸屬");
   const overlaps = (a, b) => a === "全" || b === "全" || a === b;
   const lock = f.場次 === "上" ? s.amLock : f.場次 === "下" ? s.pmLock : (s.amLock || s.pmLock);
   if (lock) errors.push(`這個時段已被 ${lock.單位 || lock.單號} 包場，請改場次或改期`);
@@ -963,24 +1577,43 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
 
         <div className="p-4 grid gap-3">
           <Row>
+            <Field label="客戶" wide>
+              <div className="flex gap-2">
+                <select value={f.客戶id} style={inp}
+                  onChange={(e) => pickCustomer(e.target.value)}>
+                  <option value="">不指定（直接打單位名稱）</option>
+                  {customers.filter((c) => c.active !== false).map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.org}{c.tax_id ? `（${c.tax_id}）` : ""}
+                    </option>
+                  ))}
+                </select>
+                <button onClick={() => setNewCust(blankCustomer())}
+                  className="px-3 py-2 text-sm rounded whitespace-nowrap"
+                  style={{ border: `1px solid ${C.line}` }}>新增客戶</button>
+              </div>
+            </Field>
+          </Row>
+          <Row>
             <Field label="單位名稱" wide>
               <input value={f.單位} onChange={(e) => set("單位", e.target.value)}
                 placeholder="例：新北市土城區清水國小" style={inp} />
             </Field>
           </Row>
           <Row>
-            <Field label="業務歸屬" wide>
-              <select value={f.業務歸屬} onChange={(e) => set("業務歸屬", e.target.value)} style={inp}>
+            <Field label="業務窗口">
+              <select value={f.業務窗口} onChange={(e) => set("業務窗口", e.target.value)} style={inp}>
                 <option value="">請選擇</option>
-                {Object.keys(ASSIGNMENTS).map((x) => <option key={x}>{x}</option>)}
+                {reps.filter((r) => r.active !== false).map((r) => (
+                  <option key={r.id} value={r.name}>{r.name}</option>
+                ))}
               </select>
             </Field>
-            <Field label="負責窗口">
-              <div className="rounded px-3 py-2 text-sm"
-                style={{ border: `1px solid ${C.line}`, background: C.paper,
-                         color: f.業務歸屬 ? C.brand : C.sub, fontWeight: f.業務歸屬 ? 600 : 400 }}>
-                {ownerOf(f.業務歸屬) || "選了業務歸屬就會帶出"}
-              </div>
+            <Field label="業務歸屬">
+              <select value={f.業務歸屬} onChange={(e) => set("業務歸屬", e.target.value)} style={inp}>
+                <option value="">請選擇</option>
+                {assigns.map((a) => <option key={a.id}>{a.name}</option>)}
+              </select>
             </Field>
             <Field label="客群">
               <select value={f.客群} onChange={(e) => set("客群", e.target.value)} style={inp}>
@@ -1174,7 +1807,7 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
           <button onClick={onClose} className="px-4 py-2 text-sm rounded flex-1"
             style={{ border: `1px solid ${C.line}` }}>取消</button>
           <button disabled={errors.length > 0}
-            onClick={() => onSubmit({ ...f, 負責窗口: ownerOf(f.業務歸屬),
+            onClick={() => onSubmit({ ...f, 負責窗口: f.業務窗口,
               收款: (f.收款 || []).filter((r) => +r.金額 > 0),
               預估營收: estRevenue(f.收款 || []),
               全票: +f.全票 || 0, 半票: +f.半票 || 0, 免票: +f.免票 || 0, 愛心: +f.愛心 || 0, 餐飲: +f.餐飲 || 0 })}
@@ -1186,6 +1819,13 @@ function RequestForm({ date, orders, editing, onClose, onSubmit }) {
           </button>
         </div>
       </div>
+
+      {newCust && (
+        <Modal title="新增客戶" onClose={() => setNewCust(null)} onSave={saveNewCustomer} wide
+          saveLabel="建立並帶入">
+          <CustomerForm edit={newCust} setEdit={setNewCust} />
+        </Modal>
+      )}
     </div>
   );
 }
