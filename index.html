@@ -90,10 +90,10 @@ function prPeak(list, start, end, qty) {
   return Math.max(...points.map((pt) => prUsedAt(list, pt) + qty));
 }
 
-const TABS = ["檔期", "任務", "表單", "匯出"];
+const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v4.0　11/04 外訪";
+const BUILD = "v4.1　11/04 表單";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -458,9 +458,11 @@ function Modal({ title, onClose, onSave, saveLabel = "儲存", wide, children, b
         <div className="p-4 grid gap-3">{children}</div>
         <div className="px-4 py-3 flex gap-2" style={{ borderTop: `1px solid ${C.line}` }}>
           <button onClick={onClose} className="px-4 py-2 text-sm rounded flex-1"
-            style={{ border: `1px solid ${C.line}` }}>取消</button>
-          <button onClick={onSave} disabled={busy} className="px-4 py-2 text-sm rounded flex-1"
-            style={{ background: C.brand, color: "#fff" }}>{busy ? "儲存中…" : saveLabel}</button>
+            style={{ border: `1px solid ${C.line}` }}>{onSave ? "取消" : "關閉"}</button>
+          {onSave && (
+            <button onClick={onSave} disabled={busy} className="px-4 py-2 text-sm rounded flex-1"
+              style={{ background: C.brand, color: "#fff" }}>{busy ? "儲存中…" : saveLabel}</button>
+          )}
         </div>
       </div>
     </div>
@@ -543,14 +545,14 @@ function HomeView({ me, onGo }) {
 
       <p className="text-xs font-medium mb-2" style={{ color: C.sub, letterSpacing: ".06em" }}>表單介面</p>
       <div className="grid gap-3 mb-6" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))" }}>
-        <button onClick={() => onGo("表單")} className="rounded p-4 text-left"
+        <button onClick={() => onGo("表單:出訪單")} className="rounded p-4 text-left"
           style={{ background: C.card, border: `1px solid ${C.line}` }}>
           <div className="font-semibold">出訪單</div>
           <div className="text-xs mt-1" style={{ color: C.sub }}>
             挑一筆外訪記錄，印成紙本落地企劃，或存成 PDF 附在公出單
           </div>
         </button>
-        <button onClick={() => onGo("表單")} className="rounded p-4 text-left"
+        <button onClick={() => onGo("表單:報價單")} className="rounded p-4 text-left"
           style={{ background: C.card, border: `1px solid ${C.line}` }}>
           <div className="font-semibold">報價單</div>
           <div className="text-xs mt-1" style={{ color: C.sub }}>先架殼，還沒做</div>
@@ -1085,7 +1087,9 @@ function App() {
   const [cursor, setCursor] = useState({ y: 2026, m: 12 });
   const [picked, setPicked] = useState(null);
   const [formOpen, setFormOpen] = useState(false);
-  const [formKind, setFormKind] = useState("活動");   // 新單是票務還是活動
+  const [formKind, setFormKind] = useState("活動");   // 新單是票務、活動還是外訪
+  const [sheet, setSheet] = useState("出訪單");       // 2 樓現在在哪一張單
+  const [sheetEdit, setSheetEdit] = useState(null);  // 表單頁正在改哪一筆
   const [editing, setEditing] = useState(null);
   const [lastNo, setLastNo] = useState(null);
   const [toast, setToast] = useState(null);
@@ -1181,10 +1185,11 @@ function App() {
     /* 票務單沒有檔期，日期與場次要存成空，由 toDb 轉成 null */
     if (rec.類別 === "票務") { rec.日期 = ""; rec.場次 = ""; }
     if (rec.類別 === "外訪") rec.場次 = "";
-    const { error } = await sb.from("bookings").insert(toDb(rec));
-    if (error) { say(clean(error.message)); return; }
+    const { data, error } = await sb.from("bookings").insert(toDb(rec)).select().single();
+    if (error) { say(clean(error.message)); return null; }
     setFormOpen(false); setPicked(o.日期 || null); setLastNo(rec.單號);
     await reload();
+    return data ? toApp(data) : null;
   };
 
   const patch = async (id, fields) => {
@@ -1318,6 +1323,8 @@ function App() {
             if (k === "新增票務" || k === "新增活動") {
               setFormKind(k === "新增票務" ? "票務" : "活動");
               setPicked(null); setEditing(null); setFormOpen(true); setTab("任務");
+            } else if (k.startsWith("表單:")) {
+              setSheet(k.slice(3)); setSheetEdit(null); setTab("表單");
             } else setTab(k);
           }} />
         )}
@@ -1331,13 +1338,34 @@ function App() {
         {tab === "任務" && admin && (
           <TaskView orders={orders} onMove={move} onRemove={remove} onEdit={setEditing}
             onField={setField} onRestore={restore}
-            onNew={(k) => { setFormKind(k); setPicked(null); setEditing(null); setFormOpen(true); }} />
+            onNew={(k) => {
+              if (k === "外訪") { setSheet("出訪單"); setSheetEdit(null); setTab("表單"); return; }
+              setFormKind(k); setPicked(null); setEditing(null); setFormOpen(true);
+            }} />
         )}
         {tab === "行事曆" && admin && (
           <CalendarAdmin cal={cal} onSave={saveCal} onDelete={delCal} say={say} />
         )}
         {tab === "表單" && admin && registered && (
-          <FormsView orders={orders} customers={customers} reps={reps} say={say} />
+          <FormsView
+            sheet={sheet} setSheet={setSheet}
+            orders={orders} customers={customers} reps={reps} assigns={assigns}
+            products={products} me={me} say={say}
+            editing={sheetEdit} setEditing={setSheetEdit}
+            onSubmit={async (o) => {
+              if (sheetEdit) {
+                await updateOrder({ ...sheetEdit, ...o });
+                say("已儲存，下面的出訪單同步更新");
+              } else {
+                const rec = await addOrder(o);
+                if (rec) setSheetEdit(rec);
+              }
+            }}
+            onSaveAsNew={async (o) => {
+              const { id, 單號, 階段, 建立, ...rest } = o;
+              const rec = await addOrder({ ...rest, 類別: "外訪" });
+              if (rec) { setSheetEdit(rec); say("已另存為新的一場"); }
+            }} />
         )}
         {tab === "匯出" && admin && <ExportView orders={orders} say={say} />}
 
@@ -1942,7 +1970,7 @@ function ItemsBox({ f, products = [], ticket, setItem, addItem, delItem, useTota
 /* ------------------------------------------------------------ 需求登記 */
 function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動",
                       customers = [], reps = [], assigns = [], products = [],
-                      me, onCustomerSaved, say }) {
+                      me, onCustomerSaved, say, inline, onSaveAsNew }) {
   const [newCust, setNewCust] = useState(null);
   const [f, setF] = useState(() => editing
     ? { ...editing, 業務窗口: editing.業務窗口 || editing.負責窗口 || "",
@@ -2090,15 +2118,15 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
 
   const box = useRef(null);
   useEffect(() => {
-    box.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, []);
+    if (!inline) box.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [inline]);
 
   return (
-    <div ref={box} className="mt-4 rounded scroll-mt-4"
-      style={{ background: C.card, border: `2px solid ${C.brand}` }}>
+    <div ref={box} className={inline ? "rounded" : "mt-4 rounded scroll-mt-4"}
+      style={{ background: C.card, border: `1px solid ${inline ? C.line : C.brand}` }}>
       <div>
 
-        <div className="px-4 py-3 flex items-center justify-between"
+        <div className={inline ? "hidden" : "px-4 py-3 flex items-center justify-between"}
           style={{ background: C.card, borderBottom: `1px solid ${C.line}` }}>
           <h2 className="font-semibold">
             {editing
@@ -2380,10 +2408,23 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
           </p>
         </div>
 
-        <div className="px-4 py-3 flex gap-2"
+        <div className="px-4 py-3 flex gap-2 flex-wrap"
           style={{ background: C.card, borderTop: `1px solid ${C.line}` }}>
-          <button onClick={onClose} className="px-4 py-2 text-sm rounded flex-1"
-            style={{ border: `1px solid ${C.line}` }}>取消</button>
+          {inline ? <span className="flex-1" /> : (
+            <button onClick={onClose} className="px-4 py-2 text-sm rounded flex-1"
+              style={{ border: `1px solid ${C.line}` }}>取消</button>
+          )}
+          {inline && editing && onSaveAsNew && (
+            <button disabled={errors.length > 0}
+              onClick={() => onSaveAsNew({ ...f, 負責窗口: f.業務窗口, 收款: [], 明細: [],
+                外訪: theVisit(f), 預估營收: 0, 場次: "", 包場: false,
+                全票: 0, 半票: 0, 免票: 0, 愛心: 0, 餐飲: 0, 劇院: 0, PR廳數: 0 })}
+              className="px-4 py-2 text-sm rounded"
+              style={errors.length ? { border: `1px solid ${C.line}`, color: C.sub }
+                                   : { border: `1px solid ${C.brand}`, color: C.brand }}>
+              另存為新的一場
+            </button>
+          )}
           <button disabled={errors.length > 0}
             onClick={() => { const flat = ticket || visit; onSubmit({ ...f, 負責窗口: f.業務窗口,
               收款: visit ? [] : (f.收款 || []).filter((r) => +r.金額 > 0),
@@ -2396,11 +2437,11 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
               免票: flat ? 0 : +f.免票 || 0, 愛心: flat ? 0 : +f.愛心 || 0,
               餐飲: flat ? 0 : +f.餐飲 || 0,
               劇院: flat ? 0 : +f.劇院 || 0, PR廳數: flat ? 0 : +f.PR廳數 || 0 }); }}
-            className="px-4 py-2 text-sm rounded flex-1"
+            className={inline ? "px-5 py-2 text-sm rounded" : "px-4 py-2 text-sm rounded flex-1"}
             style={errors.length
               ? { background: C.line, color: C.sub }
               : { background: C.brand, color: "#fff" }}>
-            {editing ? "儲存修改" : (ticket ? "建立票務單" : visit ? "建立外訪" : "登記並暫留檔期")}
+            {editing ? "儲存修改" : (ticket ? "建立票務單" : visit ? "新增" : "登記並暫留檔期")}
           </button>
         </div>
       </div>
@@ -2905,80 +2946,121 @@ function VisitSheet({ o, customer, rep }) {
   );
 }
 
-/** 2 樓：挑一筆記錄，渲染成可以列印的單子 */
-function FormsView({ orders, customers = [], reps = [], say }) {
-  const [sheet, setSheet] = useState("出訪單");
-  const [id, setId] = useState("");
+/** 2 樓：進來就能寫。右上角調用既有記錄，右下角新增或儲存。 */
+function FormsView({ sheet, setSheet, orders, customers, reps, assigns, products, me,
+                     editing, setEditing, onSubmit, onSaveAsNew, say }) {
+  const [callOpen, setCallOpen] = useState(false);
   const visits = orders.filter(isVisit).sort(byStage);
-  const o = visits.find((x) => x.id === id) || null;
-  const customer = o ? customers.find((c) => c.id === o.客戶id) : null;
-  const rep = o ? reps.find((r) => r.name === o.負責窗口) : null;
+  const saved = editing ? orders.find((x) => x.id === editing.id) : null;
+  const customer = saved ? customers.find((c) => c.id === saved.客戶id) : null;
+  const rep = saved ? reps.find((r) => r.name === saved.負責窗口) : null;
 
-  const print = () => {
-    if (!o) return say && say("先挑一筆記錄");
-    window.print();
-  };
-
-  return (
-    <>
-      <div className="flex gap-1 mb-3 flex-wrap items-center">
-        {["出訪單", "報價單"].map((k) => (
-          <button key={k} onClick={() => setSheet(k)} className="px-3 py-1.5 text-sm rounded"
-            style={sheet === k ? { background: C.ink, color: C.paper }
-                               : { color: C.sub, border: `1px solid ${C.line}` }}>{k}</button>
-        ))}
-        <span className="flex-1" />
-        {sheet === "出訪單" && o && (
-          <button onClick={print} className="px-4 py-2 text-sm rounded"
-            style={{ background: C.brand, color: "#fff" }}>列印 ／ 存成 PDF</button>
-        )}
-      </div>
-
-      {sheet === "報價單" ? (
-        <div className="rounded p-8 text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
+  if (sheet === "報價單") {
+    return (
+      <>
+        <SheetTabs sheet={sheet} setSheet={setSheet} />
+        <div className="rounded p-8 text-center"
+          style={{ background: C.card, border: `1px dashed ${C.line}` }}>
           <p className="font-medium">報價單</p>
           <p className="text-sm mt-1" style={{ color: C.sub }}>
             先架殼。等出訪單的格式定了，再把報價單搬進來。
           </p>
         </div>
-      ) : visits.length === 0 ? (
-        <div className="rounded p-8 text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
-          <p className="font-medium">還沒有外訪記錄</p>
-          <p className="text-sm mt-1" style={{ color: C.sub }}>
-            到「任務」按「新增外訪」建一筆，這裡就調得到。
-          </p>
-        </div>
-      ) : (
-        <>
-          <div className="rounded p-3 mb-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-            <p className="text-xs mb-1.5" style={{ color: C.sub }}>挑一筆外訪記錄</p>
-            <select value={id} onChange={(e) => setId(e.target.value)} style={inp}>
-              <option value="">請選擇</option>
-              {visits.map((x) => (
-                <option key={x.id} value={x.id}>
-                  {x.日期 || "日期未定"}　{x.單位}　{theVisit(x).活動類型}　{x.狀態}
-                </option>
-              ))}
-            </select>
-          </div>
+      </>
+    );
+  }
 
-          {o ? (
-            <>
-              <div id="sheetbox" className="rounded p-5"
-                style={{ background: "#fff", border: `1px solid ${C.line}` }}>
-                <VisitSheet o={o} customer={customer} rep={rep} />
-              </div>
-              <p className="text-xs mt-2" style={{ color: C.sub }}>
-                按「列印」會只印這張單，畫面上的其他東西不會跟著印出來。
-                右上角的時間戳是列印當下的時間。
-              </p>
-            </>
-          ) : (
-            <p className="text-sm" style={{ color: C.sub }}>選一筆就會長出單子。</p>
-          )}
+  return (
+    <>
+      <div className="flex gap-1 mb-3 flex-wrap items-center">
+        <SheetTabs sheet={sheet} setSheet={setSheet} inline />
+        <span className="flex-1" />
+        {editing && (
+          <span className="text-xs tnum mr-1" style={{ color: C.brand }}>
+            修改中　{editing.單號 || editing.單位}
+          </span>
+        )}
+        <button onClick={() => setCallOpen(true)} className="px-3 py-1.5 text-sm rounded"
+          style={{ border: `1px solid ${C.brand}`, color: C.brand }}>
+          調用　<span className="tnum">{visits.length}</span>
+        </button>
+        {editing && (
+          <button onClick={() => setEditing(null)} className="px-3 py-1.5 text-sm rounded"
+            style={{ border: `1px solid ${C.line}`, color: C.sub }}>清空重寫</button>
+        )}
+      </div>
+
+      <RequestForm
+        key={editing ? editing.id : "new"}
+        inline date={null} orders={orders} editing={editing} kind="外訪"
+        customers={customers} reps={reps} assigns={assigns} products={products} me={me}
+        say={say} onClose={() => setEditing(null)} onSubmit={onSubmit}
+        onSaveAsNew={onSaveAsNew} />
+
+      {saved && (
+        <>
+          <div className="flex items-center gap-2 mt-5 mb-2 flex-wrap">
+            <span className="text-xs font-medium" style={{ color: C.brand }}>可列印的出訪單</span>
+            <span className="flex-1" />
+            <button onClick={() => window.print()} className="px-4 py-2 text-sm rounded"
+              style={{ background: C.brand, color: "#fff" }}>列印 ／ 存成 PDF</button>
+          </div>
+          <div id="sheetbox" className="rounded p-5"
+            style={{ background: "#fff", border: `1px solid ${C.line}` }}>
+            <VisitSheet o={saved} customer={customer} rep={rep} />
+          </div>
+          <p className="text-xs mt-2" style={{ color: C.sub }}>
+            按「列印」只會印這張單，上面的表單和分頁列都不會跟著印出來。
+            內容以已儲存的為準，改完記得先按「儲存修改」。
+          </p>
         </>
       )}
+
+      {callOpen && (
+        <Modal title="調用外訪記錄" onClose={() => setCallOpen(false)} wide>
+          {visits.length === 0 ? (
+            <p className="text-sm" style={{ color: C.sub }}>還沒有任何外訪記錄。</p>
+          ) : (
+            <ul className="grid gap-2">
+              {visits.map((x) => (
+                <li key={x.id}>
+                  <button onClick={() => { setEditing(x); setCallOpen(false); }}
+                    className="w-full text-left rounded p-3"
+                    style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                    <div className="font-medium">
+                      {x.單位}
+                      <span className="ml-2 text-xs font-normal" style={{ color: C.sub }}>
+                        {x.狀態}
+                      </span>
+                    </div>
+                    <div className="text-xs mt-0.5 tnum" style={{ color: C.sub }}>
+                      {x.日期 || "日期未定"}　{theVisit(x).活動類型}
+                      物品 {(theVisit(x).物品 || []).length} 項　{x.單號}
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-xs mt-3" style={{ color: C.sub }}>
+            調用之後是修改這一筆，不是複製。要辦同一間學校的第二場，
+            調用舊的、改日期、再按「另存為新的一場」。
+          </p>
+        </Modal>
+      )}
     </>
+  );
+}
+
+function SheetTabs({ sheet, setSheet, inline }) {
+  return (
+    <div className={inline ? "flex gap-1" : "flex gap-1 mb-3"}>
+      {["出訪單", "報價單"].map((k) => (
+        <button key={k} onClick={() => setSheet(k)} className="px-3 py-1.5 text-sm rounded"
+          style={sheet === k ? { background: C.ink, color: C.paper }
+                             : { color: C.sub, border: `1px solid ${C.line}` }}>{k}</button>
+      ))}
+    </div>
   );
 }
 
