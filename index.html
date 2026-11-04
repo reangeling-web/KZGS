@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v4.2　11/04 複選";
+const BUILD = "v4.3　11/04 列印";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -1190,7 +1190,11 @@ function App() {
     if (error) { say(clean(error.message)); return null; }
     setFormOpen(false); setPicked(o.日期 || null); setLastNo(rec.單號);
     await reload();
-    return data ? toApp(data) : null;
+    if (data) return toApp(data);
+    /* 保險：insert 沒把新那筆回傳回來時，用單號再撈一次 */
+    const { data: again } = await sb.from("bookings")
+      .select("*").eq("order_no", rec.單號).maybeSingle();
+    return again ? toApp(again) : null;
   };
 
   const patch = async (id, fields) => {
@@ -1342,7 +1346,8 @@ function App() {
             onNew={(k) => {
               if (k === "外訪") { setSheet("出訪單"); setSheetEdit(null); setTab("表單"); return; }
               setFormKind(k); setPicked(null); setEditing(null); setFormOpen(true);
-            }} />
+            }}
+            onSheet={(o) => { setSheet("出訪單"); setSheetEdit(o); setTab("表單"); }} />
         )}
         {tab === "行事曆" && admin && (
           <CalendarAdmin cal={cal} onSave={saveCal} onDelete={delCal} say={say} />
@@ -2497,7 +2502,7 @@ function Field({ label, children, wide }) {
 }
 
 /* ---------------------------------------------------------------- 任務板 */
-function TaskView({ orders, onMove, onRemove, onEdit, onField, onRestore, onNew }) {
+function TaskView({ orders, onMove, onRemove, onEdit, onField, onRestore, onNew, onSheet }) {
   const [filter, setFilter] = useState("進行中");
   const [cats, setCats] = useState(CATEGORIES);          // 勾哪些就看哪些
   const toggleCat = (k) => setCats((p) =>
@@ -2568,14 +2573,14 @@ function TaskView({ orders, onMove, onRemove, onEdit, onField, onRestore, onNew 
         : <ul className="grid gap-2">
             {list.map((o) => (
               <TaskCard key={o.id} o={o} onMove={onMove} onRemove={onRemove} onEdit={onEdit}
-                onField={onField} onRestore={onRestore} />
+                onField={onField} onRestore={onRestore} onSheet={onSheet} />
             ))}
           </ul>}
     </>
   );
 }
 
-function TaskCard({ o, onMove, onRemove, onEdit, onField, onRestore }) {
+function TaskCard({ o, onMove, onRemove, onEdit, onField, onRestore, onSheet }) {
   const flow = flowOf(o);
   const idx = flow.indexOf(o.狀態);
   const next = idx >= 0 && idx < flow.length - 1 ? flow[idx + 1] : null;
@@ -2674,8 +2679,13 @@ function TaskCard({ o, onMove, onRemove, onEdit, onField, onRestore }) {
             </button>
           </>
         )}
-        <button onClick={() => onEdit(o)} className="px-2.5 py-1 text-xs rounded"
-          style={{ border: `1px solid ${C.line}` }}>修改內容</button>
+        {isVisit(o) && onSheet ? (
+          <button onClick={() => onSheet(o)} className="px-2.5 py-1 text-xs rounded"
+            style={{ border: `1px solid ${C.brand}`, color: C.brand }}>開出訪單</button>
+        ) : (
+          <button onClick={() => onEdit(o)} className="px-2.5 py-1 text-xs rounded"
+            style={{ border: `1px solid ${C.line}` }}>修改內容</button>
+        )}
         <button onClick={() => onRemove(o.id)} className="px-2.5 py-1 text-xs rounded ml-auto"
           style={{ color: C.badText }}>刪除</button>
       </div>
@@ -3002,9 +3012,9 @@ function FormsView({ sheet, setSheet, orders, customers, reps, assigns, products
       <div className="flex gap-1 mb-3 flex-wrap items-center">
         <SheetTabs sheet={sheet} setSheet={setSheet} inline />
         <span className="flex-1" />
-        {editing && (
+        {saved && (
           <span className="text-xs tnum mr-1" style={{ color: C.brand }}>
-            修改中　{editing.單號 || editing.單位}
+            修改中　{saved.單號 || saved.單位}
           </span>
         )}
         <button onClick={() => setCallOpen(true)} className="px-3 py-1.5 text-sm rounded"
@@ -3015,7 +3025,19 @@ function FormsView({ sheet, setSheet, orders, customers, reps, assigns, products
           <button onClick={() => setEditing(null)} className="px-3 py-1.5 text-sm rounded"
             style={{ border: `1px solid ${C.line}`, color: C.sub }}>清空重寫</button>
         )}
+        {saved && (
+          <button onClick={() => window.print()} className="px-4 py-1.5 text-sm rounded"
+            style={{ background: C.brand, color: "#fff" }}>列印 ／ 存成 PDF</button>
+        )}
       </div>
+
+      {saved && (
+        <p className="text-xs mb-3" style={{ color: C.sub }}>
+          這一筆隨時都能回來改、改完隨時能印。列印的是
+          <span style={{ fontWeight: 600, color: C.ink }}>已儲存</span>的版本，
+          所以出門前記得先按「儲存修改」再按列印。
+        </p>
+      )}
 
       <RequestForm
         key={editing ? editing.id : "new"}
@@ -3027,7 +3049,9 @@ function FormsView({ sheet, setSheet, orders, customers, reps, assigns, products
       {saved && (
         <>
           <div className="flex items-center gap-2 mt-5 mb-2 flex-wrap">
-            <span className="text-xs font-medium" style={{ color: C.brand }}>可列印的出訪單</span>
+            <span className="text-xs font-medium" style={{ color: C.brand }}>
+              出訪單預覽（已儲存的版本）
+            </span>
             <span className="flex-1" />
             <button onClick={() => window.print()} className="px-4 py-2 text-sm rounded"
               style={{ background: C.brand, color: "#fff" }}>列印 ／ 存成 PDF</button>
@@ -3038,7 +3062,6 @@ function FormsView({ sheet, setSheet, orders, customers, reps, assigns, products
           </div>
           <p className="text-xs mt-2" style={{ color: C.sub }}>
             按「列印」只會印這張單，上面的表單和分頁列都不會跟著印出來。
-            內容以已儲存的為準，改完記得先按「儲存修改」。
           </p>
         </>
       )}
@@ -3053,12 +3076,18 @@ function FormsView({ sheet, setSheet, orders, customers, reps, assigns, products
                 <li key={x.id}>
                   <button onClick={() => { setEditing(x); setCallOpen(false); }}
                     className="w-full text-left rounded p-3"
-                    style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                    style={{ background: C.card,
+                      border: `1px solid ${editing && editing.id === x.id ? C.brand : C.line}` }}>
                     <div className="font-medium">
                       {x.單位}
                       <span className="ml-2 text-xs font-normal" style={{ color: C.sub }}>
                         {x.狀態}
                       </span>
+                      {editing && editing.id === x.id && (
+                        <span className="ml-2 text-xs font-normal" style={{ color: C.brand }}>
+                          目前這一筆
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs mt-0.5 tnum" style={{ color: C.sub }}>
                       {x.日期 || "日期未定"}　{toText(theVisit(x).活動類型)}
