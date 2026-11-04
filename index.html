@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v4.3　11/04 列印";
+const BUILD = "v4.4　11/04 其他";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -1698,21 +1698,54 @@ function Slot({ name, time, left, booked, child, other, note, lock, guest }) {
   );
 }
 
-/** 一排打勾的多選。value 可以是陣列或頓號字串，回傳一律是陣列。 */
-function CheckRow({ label, options, value, onChange, hint }) {
+/** 一排打勾的多選。value 可以是陣列或頓號字串，回傳一律是陣列。
+ *  勾了「其他」會跳出文字欄，內容直接存進那個選項（存成「其他：校內運動會」），
+ *  所以出訪單與匯出不必另外處理。 */
+const OTHER = "其他";
+const OTHER_MAX = 20;
+function CheckRow({ label, options, value, onChange, hint, max = OTHER_MAX }) {
   const on = toList(value);
-  const flip = (k) => onChange(on.includes(k) ? on.filter((x) => x !== k) : [...on, k]);
+  const isOther = (x) => x === OTHER || x.startsWith(OTHER + "：");
+  const otherOn = on.some(isOther);
+  const otherText = (on.find(isOther) || "").slice(OTHER.length + 1);
+
+  const flip = (k) => {
+    if (k === OTHER) {
+      onChange(otherOn ? on.filter((x) => !isOther(x)) : [...on, OTHER]);
+      return;
+    }
+    onChange(on.includes(k) ? on.filter((x) => x !== k) : [...on, k]);
+  };
+  /* 頓號與逗號是分隔符，讓使用者打進去會把資料拆壞，輸入當下就擋掉 */
+  const setOther = (t) => {
+    const clean = t.replace(/[、,，]/g, "").slice(0, max);
+    onChange(on.map((x) => isOther(x) ? (clean ? `${OTHER}：${clean}` : OTHER) : x));
+  };
+
+  const picked = (k) => k === OTHER ? otherOn : on.includes(k);
+
   return (
     <div>
       {label && <p className="text-xs mb-1" style={{ color: C.sub }}>{label}</p>}
-      <div className="flex gap-1.5 flex-wrap">
+      <div className="flex gap-1.5 flex-wrap items-center">
         {options.map((k) => (
           <button key={k} onClick={() => flip(k)} className="px-2.5 py-1 text-xs rounded"
-            style={on.includes(k) ? { border: `1px solid ${C.brand}`, color: C.brand }
-                                  : { border: `1px solid ${C.line}`, color: C.sub }}>
-            {on.includes(k) ? "☑" : "☐"} {k}
+            style={picked(k) ? { border: `1px solid ${C.brand}`, color: C.brand }
+                             : { border: `1px solid ${C.line}`, color: C.sub }}>
+            {picked(k) ? "☑" : "☐"} {k}
           </button>
         ))}
+        {otherOn && (
+          <span className="flex items-center gap-1.5">
+            <input value={otherText} onChange={(e) => setOther(e.target.value)}
+              maxLength={max} placeholder={`請填寫，${max} 字以內`}
+              style={{ ...inp, padding: "4px 8px", fontSize: 12, width: 190 }} />
+            <span className="text-xs tnum"
+              style={{ color: otherText.length >= max ? C.badText : C.sub }}>
+              {otherText.length}/{max}
+            </span>
+          </span>
+        )}
       </div>
       {hint && <p className="text-xs mt-1" style={{ color: C.sub }}>{hint}</p>}
     </div>
@@ -2115,7 +2148,9 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
   } else if (visit) {
     /* 外訪有日期但不佔名額，只檢查最低限度 */
     if (!f.日期) errors.push("外訪要填活動日期");
-    if (!toList(theVisit(f).活動類型).length) errors.push("至少選一個活動類型");
+    const vt = toList(theVisit(f).活動類型);
+    if (!vt.length) errors.push("至少選一個活動類型");
+    if (vt.includes("其他")) errors.push("活動類型勾了「其他」，請填寫內容");
   } else {
     if (!f.日期) errors.push("活動單要填到訪日期");
     if (!f.包場 && f.場次 === "全" && isHoliday(f.日期))
