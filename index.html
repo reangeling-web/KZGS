@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v4.1　11/04 表單";
+const BUILD = "v4.2　11/04 複選";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -120,10 +120,14 @@ const flowOf = (o) => (isVisit(o) ? FLOW_VISIT : FLOW);
 
 /** 外訪的內容。校園資料從客戶建檔帶，這裡只存這一場自己的東西。 */
 const VISIT_TYPES = ["園遊會", "體表會", "音樂會", "校慶", "其他"];
+/** 多選欄位一律用頓號串成字串存，舊資料是單一字串也讀得懂 */
+const toList = (v) => Array.isArray(v) ? v.filter(Boolean)
+  : String(v || "").split(/[、,，]/).map((x) => x.trim()).filter(Boolean);
+const toText = (v) => toList(v).join("、");
 const KEYMAN = ["班導師", "家長會", "教務處", "訓育組", "學務處", "旅行社"];
 const blankVisit = () => ({
-  活動類型: "", 進場: "", 開始: "", 撤場: "",
-  攤位: "", 攤位費用: "", 學校提供: "", 預估人流: "",
+  活動類型: [], 進場: "", 開始: "", 撤場: "",
+  攤位: "", 攤位費用: "", 學校提供: "", 預估支出: "", 預估人流: "",
   曾到訪: "", keyman: [], 引薦來源: "",
   承辦: [
     { 角色: "主責業務",   姓名: "", 電話: "", 負責: "學校聯繫、現場總指揮" },
@@ -741,16 +745,13 @@ function CustomerForm({ edit, setEdit }) {
               {SCHOOL_TYPES.map((x) => <option key={x}>{x}</option>)}
             </select>
           </Field>
-          <Field label="學制">
-            <select value={edit.level || ""} style={inp} onChange={f("level")}>
-              <option value="">未填</option>
-              {SCHOOL_LEVELS.map((x) => <option key={x}>{x}</option>)}
-            </select>
-          </Field>
           <Field label="行政區">
             <input value={edit.district || ""} style={inp} onChange={f("district")} />
           </Field>
         </Row>
+        <CheckRow label="學制（可複選）" options={SCHOOL_LEVELS} value={edit.level}
+          onChange={(x) => setEdit({ ...edit, level: toText(x) })}
+          hint="完全中學、附設幼兒園的學校會跨學制。" />
         <Row>
           <Field label="班級數">
             <input type="number" min="0" value={edit.classes || 0} style={inp} className="tnum"
@@ -1692,6 +1693,27 @@ function Slot({ name, time, left, booked, child, other, note, lock, guest }) {
   );
 }
 
+/** 一排打勾的多選。value 可以是陣列或頓號字串，回傳一律是陣列。 */
+function CheckRow({ label, options, value, onChange, hint }) {
+  const on = toList(value);
+  const flip = (k) => onChange(on.includes(k) ? on.filter((x) => x !== k) : [...on, k]);
+  return (
+    <div>
+      {label && <p className="text-xs mb-1" style={{ color: C.sub }}>{label}</p>}
+      <div className="flex gap-1.5 flex-wrap">
+        {options.map((k) => (
+          <button key={k} onClick={() => flip(k)} className="px-2.5 py-1 text-xs rounded"
+            style={on.includes(k) ? { border: `1px solid ${C.brand}`, color: C.brand }
+                                  : { border: `1px solid ${C.line}`, color: C.sub }}>
+            {on.includes(k) ? "☑" : "☐"} {k}
+          </button>
+        ))}
+      </div>
+      {hint && <p className="text-xs mt-1" style={{ color: C.sub }}>{hint}</p>}
+    </div>
+  );
+}
+
 /** 區塊外框。一定要定義在元件外面，否則每次 render 都是新元件，輸入框會失焦。 */
 function Sec({ t, children, right }) {
   return (
@@ -1721,8 +1743,6 @@ function VisitBox({ v, setV, products = [] }) {
     setV("互動", (v.互動 || []).map((r, j) => j === i ? { ...r, [k]: val } : r));
   const addAct = () => setV("互動", [...(v.互動 || []), { 內容: "", 做法: "", 人次: "" }]);
   const delAct = (i) => setV("互動", (v.互動 || []).filter((_, j) => j !== i));
-  const toggleKey = (k) => setV("keyman",
-    (v.keyman || []).includes(k) ? (v.keyman || []).filter((x) => x !== k) : [...(v.keyman || []), k]);
 
   const cell = { ...inp, padding: "5px 7px", fontSize: 13 };
 
@@ -1730,22 +1750,21 @@ function VisitBox({ v, setV, products = [] }) {
     <>
       <Sec t="活動資訊">
         <Row>
-          <Field label="活動類型">
-            <select value={v.活動類型} onChange={(e) => setV("活動類型", e.target.value)} style={inp}>
-              <option value="">請選擇</option>
-              {VISIT_TYPES.map((x) => <option key={x}>{x}</option>)}
-            </select>
-          </Field>
           <Field label="進場時間">
-            <input type="time" value={v.進場} onChange={(e) => setV("進場", e.target.value)} style={inp} />
+            <input type="time" lang="en-GB" value={v.進場}
+              onChange={(e) => setV("進場", e.target.value)} style={inp} />
           </Field>
           <Field label="開始時間">
-            <input type="time" value={v.開始} onChange={(e) => setV("開始", e.target.value)} style={inp} />
+            <input type="time" lang="en-GB" value={v.開始}
+              onChange={(e) => setV("開始", e.target.value)} style={inp} />
           </Field>
           <Field label="撤場時間">
-            <input type="time" value={v.撤場} onChange={(e) => setV("撤場", e.target.value)} style={inp} />
+            <input type="time" lang="en-GB" value={v.撤場}
+              onChange={(e) => setV("撤場", e.target.value)} style={inp} />
           </Field>
         </Row>
+        <CheckRow label="活動類型（可複選）" options={VISIT_TYPES}
+          value={v.活動類型} onChange={(x) => setV("活動類型", x)} />
         <Row>
           <Field label="攤位位置／編號">
             <input value={v.攤位} onChange={(e) => setV("攤位", e.target.value)} style={inp} />
@@ -1758,9 +1777,21 @@ function VisitBox({ v, setV, products = [] }) {
             <input value={v.預估人流} onChange={(e) => setV("預估人流", e.target.value)} style={inp} />
           </Field>
         </Row>
-        <Field label="學校提供（桌椅／電源／帳篷）" wide>
-          <input value={v.學校提供} onChange={(e) => setV("學校提供", e.target.value)} style={inp} />
-        </Field>
+        <Row>
+          <Field label="學校提供（桌椅／電源／帳篷）" wide>
+            <input value={v.學校提供} onChange={(e) => setV("學校提供", e.target.value)}
+              placeholder="學校實際提供什麼" style={inp} />
+          </Field>
+        </Row>
+        <Row>
+          <Field label="預估支出">
+            <input type="number" min="0" value={v.預估支出} className="tnum"
+              onChange={(e) => setV("預估支出", e.target.value)} style={inp} />
+          </Field>
+        </Row>
+        <p className="text-xs" style={{ color: C.sub }}>
+          學校沒提供、要自己張羅的部分。這筆金額不進營收統計，匯出會獨立一欄。
+        </p>
       </Sec>
 
       <Sec t="合作紀錄">
@@ -1773,21 +1804,8 @@ function VisitBox({ v, setV, products = [] }) {
             <input value={v.引薦來源} onChange={(e) => setV("引薦來源", e.target.value)} style={inp} />
           </Field>
         </Row>
-        <div>
-          <p className="text-xs mb-1" style={{ color: C.sub }}>可能的 Key man</p>
-          <div className="flex gap-1.5 flex-wrap">
-            {KEYMAN.map((k) => {
-              const on = (v.keyman || []).includes(k);
-              return (
-                <button key={k} onClick={() => toggleKey(k)} className="px-2.5 py-1 text-xs rounded"
-                  style={on ? { border: `1px solid ${C.brand}`, color: C.brand }
-                            : { border: `1px solid ${C.line}`, color: C.sub }}>
-                  {on ? "☑" : "☐"} {k}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <CheckRow label="可能的 Key man（可複選）" options={KEYMAN}
+          value={v.keyman} onChange={(x) => setV("keyman", x)} />
       </Sec>
 
       <Sec t="KZ 承辦人">
@@ -2003,10 +2021,18 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
   /** 選客戶：帶入單位、客群、聯絡人、電話，帶入後仍可自行修改 */
   const pickCustomer = (id) => {
     const c = customers.find((x) => x.id === id);
-    setF((p) => !c
-      ? { ...p, 客戶id: "" }
-      : { ...p, 客戶id: id, 單位: c.org, 客群: c.segment || p.客群,
-          聯絡人: c.contact || p.聯絡人, 電話: c.phone || c.mobile || p.電話 });
+    setF((p) => {
+      if (!c) return { ...p, 客戶id: "" };
+      const nx = { ...p, 客戶id: id, 單位: c.org, 客群: c.segment || p.客群,
+        聯絡人: c.contact || p.聯絡人, 電話: c.phone || c.mobile || p.電話 };
+      /* 外訪：預估人流沒填過才帶入學生人數，已經填的不蓋掉 */
+      if (p.類別 === "外訪") {
+        const vv = theVisit(p);
+        if (!String(vv.預估人流 || "").trim() && c.students)
+          nx.外訪 = { ...vv, 預估人流: String(c.students) };
+      }
+      return nx;
+    });
   };
 
   /** 表單裡直接建一筆新客戶，存完自動選起來 */
@@ -2084,7 +2110,7 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
   } else if (visit) {
     /* 外訪有日期但不佔名額，只檢查最低限度 */
     if (!f.日期) errors.push("外訪要填活動日期");
-    if (!theVisit(f).活動類型) errors.push("選一個活動類型");
+    if (!toList(theVisit(f).活動類型).length) errors.push("至少選一個活動類型");
   } else {
     if (!f.日期) errors.push("活動單要填到訪日期");
     if (!f.包場 && f.場次 === "全" && isHoliday(f.日期))
@@ -2568,7 +2594,7 @@ function TaskCard({ o, onMove, onRemove, onEdit, onField, onRestore }) {
           <div className="text-xs mt-0.5 tnum" style={{ color: C.sub }}>
             {o.單號 || "—"}
             {isVisit(o)
-              ? <>・{o.日期 || "日期未定"}　{theVisit(o).活動類型}
+              ? <>・{o.日期 || "日期未定"}　{toText(theVisit(o).活動類型)}
                   {theVisit(o).開始 ? `　${theVisit(o).開始}–${theVisit(o).撤場}` : ""}</>
               : o.日期
                 ? <>・{o.日期}　{o.包場 ? "包場" : o.場次 === "全" ? "全場"
@@ -2853,15 +2879,16 @@ function VisitSheet({ o, customer, rep }) {
           <col style={{ width: "11%" }} /><col style={{ width: "14%" }} /></colgroup>
         <tbody>
           <tr>{L("學校")}{D(o.單位, 3)}{L("單號")}{D(o.單號)}</tr>
-          <tr>{L("活動日期")}{D(dateWD(o.日期))}{L("活動類型")}{D(v.活動類型)}
+          <tr>{L("活動日期")}{D(dateWD(o.日期))}{L("活動類型")}{D(toText(v.活動類型))}
               {L("狀態")}{D(o.狀態)}</tr>
           <tr>{L("進場／開始／撤場")}
               {D([v.進場, v.開始, v.撤場].filter(Boolean).join(" ／ "), 3)}
               {L("預估人流")}{D(v.預估人流)}</tr>
           <tr>{L("攤位位置")}{D(v.攤位)}{L("攤位費用與規定")}{D(v.攤位費用, 3)}</tr>
-          <tr>{L("學校提供")}{D(v.學校提供, 5)}</tr>
+          <tr>{L("學校提供")}{D(v.學校提供, 3)}
+              {L("預估支出")}{D(v.預估支出 ? `NT$ ${money(v.預估支出)}` : "")}</tr>
           <tr>{L("學校屬性")}
-              {D([c.school_type, c.level, c.district].filter(Boolean).join("　"))}
+              {D([c.school_type, toText(c.level), c.district].filter(Boolean).join("　"))}
               {L("規模")}{D(c.classes || c.students
                 ? `${c.classes || "—"} 班 ／ ${c.students || "—"} 人` : "")}
               {L("引薦")}{D(c.referral || v.引薦來源)}</tr>
@@ -2878,7 +2905,7 @@ function VisitSheet({ o, customer, rep }) {
           {(v.承辦 || []).map((r, i) => (
             <tr key={i}><td style={SH.lab}>{r.角色}</td>{D(r.姓名)}{D(r.電話)}{D(r.負責)}</tr>
           ))}
-          <tr><td style={SH.lab}>可能 Key man</td>{D((v.keyman || []).join("、"), 3)}</tr>
+          <tr><td style={SH.lab}>可能 Key man</td>{D(toText(v.keyman), 3)}</tr>
         </tbody>
       </table>
 
@@ -3034,7 +3061,7 @@ function FormsView({ sheet, setSheet, orders, customers, reps, assigns, products
                       </span>
                     </div>
                     <div className="text-xs mt-0.5 tnum" style={{ color: C.sub }}>
-                      {x.日期 || "日期未定"}　{theVisit(x).活動類型}
+                      {x.日期 || "日期未定"}　{toText(theVisit(x).活動類型)}
                       物品 {(theVisit(x).物品 || []).length} 項　{x.單號}
                     </div>
                   </button>
@@ -3114,9 +3141,10 @@ function ExportView({ orders, say }) {
       ).join("；"),
       建立日: o.建立, 佔用名額: occupies(o) && o.日期 ? "是" : "否",
       報價明細: itemsText(o.明細),
-      外訪類型: isVisit(o) ? theVisit(o).活動類型 : "",
+      外訪類型: isVisit(o) ? toText(theVisit(o).活動類型) : "",
       外訪時間: isVisit(o)
         ? [theVisit(o).進場, theVisit(o).開始, theVisit(o).撤場].filter(Boolean).join("／") : "",
+      外訪預估支出: isVisit(o) ? (+theVisit(o).預估支出 || 0) : "",
       外訪成效: isVisit(o)
         ? Object.entries(theVisit(o).成效 || {})
             .filter(([, x]) => x).map(([k, x]) => `${k} ${x}`).join("；") : "",
