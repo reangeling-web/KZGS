@@ -93,24 +93,25 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v4.4　11/04 其他";
+const BUILD = "v4.6　11/05 排序";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
 const FLOW = ["檔期暫留", "已報價", "已確認", "行前作業", "已到訪", "已結案"];
 const HOLD_STATES = ["檔期暫留", "已報價", "已確認", "行前作業"];
 /** 排序用：越接近成交的排越前面，沒進度的排後面 */
-const STAGE_RANK = {
-  已結案: 6, 已到訪: 5, 行前作業: 4, 已確認: 3, 已報價: 2, 檔期暫留: 1, 流失: 0,
-  已完成: 5, 行程確認: 3, 籌備中: 1,
-};
-const byStage = (a, b) =>
-  (STAGE_RANK[b.狀態] ?? 0) - (STAGE_RANK[a.狀態] ?? 0) ||
-  String(a.日期).localeCompare(String(b.日期));
 const money = (n) => (+n || 0).toLocaleString("zh-TW");
 
 /** 單據分三類。票務沒有檔期、外訪是走出去，兩者都不佔名額；活動照舊。 */
 const CATEGORIES = ["活動", "票務", "外訪"];
+const CAT_RANK = { 活動: 0, 票務: 1, 外訪: 2 };
+/** 任務列表：先分類別，同類別再依預定日期。沒有日期的排最後。 */
+const byCatDate = (a, b) =>
+  (CAT_RANK[a.類別 || "活動"] ?? 9) - (CAT_RANK[b.類別 || "活動"] ?? 9) ||
+  String(a.日期 || "9999-99-99").localeCompare(String(b.日期 || "9999-99-99"));
+/** 匯出：純依預定日期由近到遠，沒有日期的排最後。 */
+const byDate = (a, b) =>
+  String(a.日期 || "9999-99-99").localeCompare(String(b.日期 || "9999-99-99"));
 const isTicket = (o) => o.類別 === "票務";
 const isVisit  = (o) => o.類別 === "外訪";
 
@@ -2544,8 +2545,8 @@ function TaskView({ orders, onMove, onRemove, onEdit, onField, onRestore, onNew,
     p.includes(k) ? (p.length > 1 ? p.filter((x) => x !== k) : p) : [...p, k]);
   const pool = orders.filter((o) => cats.includes(o.類別 || "活動"));
   const END = ["已結案", "流失", "已到訪", "已完成"];
-  const live = pool.filter((o) => !END.includes(o.狀態)).sort(byStage);
-  const done = pool.filter((o) => END.includes(o.狀態)).sort(byStage);
+  const live = pool.filter((o) => !END.includes(o.狀態)).sort(byCatDate);
+  const done = pool.filter((o) => END.includes(o.狀態)).sort(byCatDate);
   const list = filter === "進行中" ? live : done;
 
   if (!orders.length) {
@@ -3022,7 +3023,7 @@ function VisitSheet({ o, customer, rep }) {
 function FormsView({ sheet, setSheet, orders, customers, reps, assigns, products, me,
                      editing, setEditing, onSubmit, onSaveAsNew, say }) {
   const [callOpen, setCallOpen] = useState(false);
-  const visits = orders.filter(isVisit).sort(byStage);
+  const visits = orders.filter(isVisit).sort(byDate);
   const saved = editing ? orders.find((x) => x.id === editing.id) : null;
   const customer = saved ? customers.find((c) => c.id === saved.客戶id) : null;
   const rep = saved ? reps.find((r) => r.name === saved.負責窗口) : null;
@@ -3165,18 +3166,19 @@ function ExportView({ orders, say }) {
     p.includes(k) ? (p.length > 1 ? p.filter((x) => x !== k) : p) : [...p, k]);
   const pool = orders.filter((o) => cats.includes(o.類別 || "活動"));
 
-  const rows = [...pool].sort(byStage).map((o) => {
+  const rows = [...pool].sort(byDate).map((o) => {
     const paid = paidAmount(payRows(o));
     const est = +o.預估營收 || 0;
     return {
-      /* 這幾欄放最前面：主管看的是營收，活動日期次之 */
+      /* 前五欄是 AC 主要看的，順序固定不要動 */
       報價類別: o.類別 || "活動",
+      預定日期: o.日期 || "",
+      預定單位: o.單位,
+      狀態: o.狀態,
+      預估總營收: est,
+
       業務歸屬: o.業務歸屬 || "",
       業務窗口: o.負責窗口 || "",
-      預估總營收: est,
-      狀態: o.狀態,
-      預定單位: o.單位,
-      預定日期: o.日期 || "",
       預定總人數: headcount(o),
       已付金額: paid,
       未付金額: Math.max(0, est - paid),
@@ -3313,7 +3315,7 @@ function ExportView({ orders, say }) {
       </div>
 
       <p className="text-xs mb-3" style={{ color: C.sub }}>
-        依狀態排序，越接近成交的排越前面。兩個分頁：預訂名單是逐筆明細，每日現況是名額結果。
+        依預定日期由近到遠排序，沒有日期的排最後。兩個分頁：預訂名單是逐筆明細，每日現況是名額結果。
         之後要接營運部票務系統，照他們的匯入規格改欄名就好。
       </p>
 
