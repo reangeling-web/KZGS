@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v5.1　11/06 實虛線";
+const BUILD = "v5.0　11/06 付款現況";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -101,6 +101,14 @@ const FLOW = ["檔期暫留", "已報價", "已確認", "行前作業", "已到�
 const HOLD_STATES = ["檔期暫留", "已報價", "已確認", "行前作業"];
 /** 排序用：越接近成交的排越前面，沒進度的排後面 */
 const money = (n) => (+n || 0).toLocaleString("zh-TW");
+/** 月曆格子很窄，金額一律縮成萬 */
+const wan = (n) => {
+  const v = +n || 0;
+  if (v === 0) return "0";
+  if (v < 10000) return money(v);
+  const w = v / 10000;
+  return `${w >= 100 ? Math.round(w) : w.toFixed(1)} 萬`;
+};
 
 /** 單據分三類。票務沒有檔期、外訪是走出去，兩者都不佔名額；活動照舊。 */
 const CATEGORIES = ["活動", "票務", "外訪"];
@@ -256,14 +264,6 @@ function stageLabel(o) {
 }
 
 /* ------------------------------------------------- 名額計算：包場優先 */
-/** 這些單裡面已收佔預定的比例。都沒有金額時回 0，線就全是虛的。 */
-function payRatio(eff, slots) {
-  const rows = eff.filter((o) => slots.includes(o.場次));
-  const rev = rows.reduce((a, o) => a + (+o.預估營收 || 0), 0);
-  if (rev <= 0) return 0;
-  return Math.min(1, rows.reduce((a, o) => a + paidAmount(payRows(o)), 0) / rev);
-}
-
 function dayStats(orders, dateStr, excludeId) {
   const eff = orders.filter(
     (o) => o.日期 === dateStr && o.id !== excludeId && occupies(o)
@@ -300,9 +300,9 @@ function dayStats(orders, dateStr, excludeId) {
     amOther: amAll - amChild, pmOther: pmAll - pmChild,
     dayChild, dayAll,
     peak: pooled ? dayAll : Math.max(amAll, pmAll),
-    /* 實虛線用：各場次已收佔預定的比例，決定那條線有多少比例是實線 */
-    amPaidRatio: payRatio(eff, ["上", "全"]),
-    pmPaidRatio: payRatio(eff, ["下", "全"]),
+    /* 付款現況用：這一天的預定金額與其中已收的部分 */
+    rev: eff.reduce((a, o) => a + (+o.預估營收 || 0), 0),
+    paid: eff.reduce((a, o) => a + paidAmount(payRows(o)), 0),
     amRatio: pooled ? ratio : Math.min(1, amChild / CAP_CHILD),
     pmRatio: pooled ? ratio : Math.min(1, pmChild / CAP_CHILD),
   };
@@ -1446,6 +1446,7 @@ const CSS = `
 
 /* ------------------------------------------------------------ 檔期預覽 */
 function CalendarView({ getDay, cursor, setCursor, picked, setPicked, onNew, admin, guest }) {
+  const [mode, setMode] = useState("預訂");          // 預訂現況 ／ 付款現況
   const { y, m } = cursor;
   const first = new Date(y, m - 1, 1);
   const days = new Date(y, m, 0).getDate();
@@ -1462,31 +1463,53 @@ function CalendarView({ getDay, cursor, setCursor, picked, setPicked, onNew, adm
     setCursor({ y: yy, m: mm }); setPicked(null);
   };
 
+  const pay = mode === "付款";
+  /* 付款現況的長條以本月預定金額最高的那一天為滿格 */
+  const monthMax = pay
+    ? Math.max(1, ...cells.filter(Boolean).map((d) => getDay(d).rev || 0))
+    : 1;
+
   return (
     <>
-      <div className="flex items-center justify-between mb-2 flex-wrap gap-y-2">
-        <div className="flex items-center gap-3">
-          <button onClick={() => step(-1)} className="w-8 h-8 rounded text-lg leading-none"
-            style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="上個月">‹</button>
-          <div className="text-lg font-semibold tnum" style={{ minWidth: "7.5rem" }}>
-            {y} 年 {m} 月
-          </div>
-          <button onClick={() => step(1)} className="w-8 h-8 rounded text-lg leading-none"
-            style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="下個月">›</button>
-        </div>
-        <div className="flex items-center gap-3 text-xs flex-wrap" style={{ color: C.sub }}>
-          <Legend color={C.okBar} label="可售" />
-          <Legend color={C.warnBar} label="吃緊" />
-          <Legend color={C.badBar} label="不可售" />
-          <span style={{ width: 1, height: 12, background: C.line }} />
-          <LegendLine label="已付訂" />
-          <LegendLine dashed label="僅預定" />
+      <div className="flex items-baseline justify-between mb-2 flex-wrap gap-2">
+        <h2 className="text-lg font-semibold">
+          團體
+          <button onClick={() => setMode(pay ? "預訂" : "付款")}
+            className="mx-1 px-2 py-0.5 rounded text-lg"
+            style={{ border: `1px solid ${C.brand}`, color: C.brand }}
+            title="點一下切換另一種檢視">{mode}</button>
+          現況
+        </h2>
+        <div className="flex items-center gap-3 text-xs" style={{ color: C.sub }}>
+          {pay ? (
+            <>
+              <LegendLine dashed label="已預定" />
+              <LegendLine label="已付訂" />
+            </>
+          ) : (
+            <>
+              <Legend color={C.okBar} label="可售" />
+              <Legend color={C.warnBar} label="吃緊" />
+              <Legend color={C.badBar} label="不可售" />
+            </>
+          )}
         </div>
       </div>
-      <p className="text-xs mb-3" style={{ color: C.sub }}>
-        顏色看名額鬆不鬆，實虛看錢進來了沒。紅色但整條虛線代表帳面滿了卻一毛沒收，
-        橘色但整條實線才是真的被吃掉。
-      </p>
+
+      <div className="flex items-center gap-3 mb-3">
+        <button onClick={() => step(-1)} className="w-8 h-8 rounded text-lg leading-none"
+          style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="上個月">‹</button>
+        <div className="text-lg font-semibold tnum" style={{ minWidth: "7.5rem" }}>
+          {y} 年 {m} 月
+        </div>
+        <button onClick={() => step(1)} className="w-8 h-8 rounded text-lg leading-none"
+          style={{ border: `1px solid ${C.line}`, background: C.card }} aria-label="下個月">›</button>
+        {pay && (
+          <span className="text-xs" style={{ color: C.sub }}>
+            長度以本月最高的一天（{wan(monthMax)}）為滿格
+          </span>
+        )}
+      </div>
 
       <div className="grid grid-cols-7 gap-px rounded overflow-hidden"
         style={{ background: C.line, border: `1px solid ${C.line}` }}>
@@ -1497,7 +1520,7 @@ function CalendarView({ getDay, cursor, setCursor, picked, setPicked, onNew, adm
         {cells.map((d, i) =>
           d === null
             ? <div key={i} style={{ background: C.paper, minHeight: 76 }} />
-            : <DayCell key={d} date={d} s={getDay(d)}
+            : <DayCell key={d} date={d} s={getDay(d)} pay={pay} monthMax={monthMax}
                 selected={picked === d} onClick={() => setPicked(picked === d ? null : d)} />
         )}
       </div>
@@ -1514,27 +1537,17 @@ function CalendarView({ getDay, cursor, setCursor, picked, setPicked, onNew, adm
 function Legend({ color, label }) {
   return (
     <span className="flex items-center gap-1.5">
-      <span style={{ display: "block", width: 18, height: 4, borderRadius: 2, background: color }} />
+      <span style={{ width: 14, height: 4, background: color, borderRadius: 2 }} />
       {label}
     </span>
   );
 }
 
-function LegendLine({ dashed, label }) {
-  return (
-    <span className="flex items-center gap-1.5">
-      <span style={dashed
-        ? { display: "block", width: 18, height: 0, borderTop: `3px dashed ${C.sub}` }
-        : { display: "block", width: 18, height: 4, borderRadius: 2, background: C.sub }} />
-      {label}
-    </span>
-  );
-}
-
-function DayCell({ date, s, selected, onClick }) {
+function DayCell({ date, s, selected, onClick, pay, monthMax }) {
   const d = parse(date);
   const hol = isHoliday(date);
   const bo = !!(s.amLock && s.pmLock);
+  const rev = s.rev || 0, got = s.paid || 0;
 
   return (
     <button onClick={onClick} className="text-left p-1.5 flex flex-col gap-1"
@@ -1547,15 +1560,25 @@ function DayCell({ date, s, selected, onClick }) {
         {d.getDate()}
       </span>
 
-      {bo ? (
+      {pay ? (
+        /* 付款現況：虛線是已預定，實線是已付訂。沒預定就兩條都不畫。 */
         <>
-          <span className="text-xs font-semibold mt-1" style={{ color: C.badText }}>包場</span>
-          <Bar ratio={1} left={0} paid={s.amPaidRatio} />
+          <PayBar ratio={rev / monthMax} dashed />
+          <PayBar ratio={got / monthMax} />
+          <span className="text-xs tnum mt-auto"
+            style={{ color: rev <= 0 ? C.sub : got <= 0 ? C.badText
+              : got >= rev ? C.okText : C.ink }}>
+            {rev <= 0 ? "" : got <= 0 ? `${wan(rev)}　未收`
+              : got >= rev ? `${wan(rev)}　付清`
+              : `${wan(got)} / ${wan(rev)}`}
+          </span>
         </>
+      ) : bo ? (
+        <span className="text-xs font-semibold mt-1" style={{ color: C.badText }}>包場</span>
       ) : (
         <>
-          <Bar ratio={s.amLock ? 1 : s.amRatio} left={s.amLock ? 0 : s.am} paid={s.amPaidRatio} />
-          <Bar ratio={s.pmLock ? 1 : s.pmRatio} left={s.pmLock ? 0 : s.pm} paid={s.pmPaidRatio} />
+          <Bar ratio={s.amLock ? 1 : s.amRatio} left={s.amLock ? 0 : s.am} />
+          <Bar ratio={s.pmLock ? 1 : s.pmRatio} left={s.pmLock ? 0 : s.pm} />
           <span className="text-xs tnum mt-auto"
             style={{ color: s.amLock || s.pmLock ? C.badText : TONE[toneOf(s.full)].t }}>
             {s.amLock ? "上包場" : s.pmLock ? "下包場"
@@ -1567,25 +1590,43 @@ function DayCell({ date, s, selected, onClick }) {
   );
 }
 
-/** 上下半場各一條，滿格代表全票 700 用完。
- *  顏色＝名額鬆緊；實線的那一段＝已收的比例，剩下的畫虛線。 */
-function Bar({ ratio, left, paid = 0 }) {
+/** 付款現況的線。虛線＝已預定，實線＝已付訂，沒有金額就不畫。 */
+function PayBar({ ratio, dashed }) {
+  const r = Math.min(1, Math.max(0, ratio || 0));
+  if (r <= 0) return <span style={{ display: "block", height: 4 }} />;
+  const w = `${Math.max(r * 100, 6)}%`;
+  return (
+    <span style={{ display: "block", height: 4 }}>
+      {dashed
+        ? <span style={{ display: "block", width: w, height: 0, marginTop: 1,
+            borderTop: `3px dashed ${C.ink}` }} />
+        : <span style={{ display: "block", width: w, height: 4, borderRadius: 2,
+            background: C.ink }} />}
+    </span>
+  );
+}
+
+function LegendLine({ dashed, label }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span style={dashed
+        ? { display: "block", width: 18, height: 0, borderTop: `3px dashed ${C.ink}` }
+        : { display: "block", width: 18, height: 4, borderRadius: 2, background: C.ink }} />
+      {label}
+    </span>
+  );
+}
+
+/** 上下半場各一條，滿格代表全票 700 用完 */
+function Bar({ ratio, left }) {
   const tone = TONE[toneOf(left)];
-  const w = Math.max(ratio * 100, ratio > 0 ? 6 : 0);
-  const solid = Math.min(1, Math.max(0, paid));
   return (
     <span style={{ display: "block", height: 4, background: C.line, borderRadius: 2 }}>
-      <span style={{ display: "flex", height: 4, width: `${w}%`, borderRadius: 2,
-        overflow: "hidden" }}>
-        {solid > 0 && (
-          <span style={{ display: "block", height: 4, width: `${solid * 100}%`,
-            background: tone.bar, borderRadius: 2 }} />
-        )}
-        {solid < 1 && (
-          <span style={{ display: "block", height: 0, width: `${(1 - solid) * 100}%`,
-            marginTop: 1, borderTop: `3px dashed ${tone.bar}` }} />
-        )}
-      </span>
+      <span style={{
+        display: "block", height: 4, borderRadius: 2,
+        width: `${Math.max(ratio * 100, ratio > 0 ? 6 : 0)}%`,
+        background: tone.bar,
+      }} />
     </span>
   );
 }
