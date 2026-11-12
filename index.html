@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v6.5　11/12 統一取消";
+const BUILD = "v6.6　11/12 修空日期";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -191,12 +191,19 @@ const setCalendarMap = (m) => { CAL = m; };
 /* ------------------------------------------------------------------ 工具 */
 const pad = (n) => String(n).padStart(2, "0");
 const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const parse = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+/** 票務單沒有日期，傳進來會是 null。不防的話 null.split 會讓整個畫面掛掉。 */
+const parse = (s) => {
+  if (!s) return null;
+  const [y, m, d] = String(s).split("-").map(Number);
+  return new Date(y, m - 1, d);
+};
 const todayISO = () => iso(new Date());
 
 function isHoliday(dateStr) {
+  if (!dateStr) return false;                 // 沒有日期就當平日，不影響任何計算
   if (CAL[dateStr]) return CAL[dateStr] === "假日";
   const d = parse(dateStr);
+  if (!d) return false;
   return d.getDay() === 0 || d.getDay() === 6;
 }
 const calNote = (dateStr) => (CAL_NOTE[dateStr] || "");
@@ -209,10 +216,14 @@ function sessionTime(dateStr, slot) {
   return hol ? "10:00–21:00" : "09:00–20:00";
 }
 function daysBetween(a, b) {
-  return Math.round((parse(b) - parse(a)) / 86400000);
+  const x = parse(a), y = parse(b);
+  if (!x || !y) return 0;
+  return Math.round((y - x) / 86400000);
 }
 function addDays(dateStr, n) {
-  const d = parse(dateStr); d.setDate(d.getDate() + n); return iso(d);
+  const d = parse(dateStr);
+  if (!d) return "";
+  d.setDate(d.getDate() + n); return iso(d);
 }
 /** 單號：KZ＋年月日時分＋兩碼順序。同一分鐘內的第幾筆就是尾碼。 */
 function makeOrderNo(taken) {
@@ -1445,6 +1456,7 @@ function App() {
             getDay={getDay} cursor={cursor} setCursor={setCursor}
             picked={picked} setPicked={setPicked} admin={admin} guest={guest}
             onNew={(d) => { setFormKind("活動"); setPicked(d); setFormOpen(true); }}
+            onEdit={(o) => setEditing(o)}
           />
         )}
         {tab === "任務" && admin && (
@@ -1493,6 +1505,7 @@ function App() {
         )}
 
         {(formOpen || editing) && (
+          <Boundary key={editing ? editing.id : "new"}>
           <RequestForm
             date={picked} orders={orders} editing={editing} kind={formKind}
             customers={customers} reps={reps} assigns={assigns} products={products} me={me}
@@ -1500,6 +1513,7 @@ function App() {
             onClose={() => { setFormOpen(false); setEditing(null); }}
             onSubmit={editing ? updateOrder : addOrder}
           />
+          </Boundary>
         )}
       </main>
 
@@ -1540,7 +1554,7 @@ const CSS = `
 `;
 
 /* ------------------------------------------------------------ 檔期預覽 */
-function CalendarView({ getDay, cursor, setCursor, picked, setPicked, onNew, admin, guest }) {
+function CalendarView({ getDay, cursor, setCursor, picked, setPicked, onNew, onEdit, admin, guest }) {
   const { y, m } = cursor;
   const first = new Date(y, m - 1, 1);
   const days = new Date(y, m, 0).getDate();
@@ -1598,7 +1612,8 @@ function CalendarView({ getDay, cursor, setCursor, picked, setPicked, onNew, adm
       </div>
 
       {picked
-        ? <DayPanel date={picked} s={getDay(picked)} onNew={onNew} admin={admin} guest={guest} />
+        ? <DayPanel date={picked} s={getDay(picked)} onNew={onNew} onEdit={onEdit}
+            admin={admin} guest={guest} />
         : <p className="text-sm mt-4" style={{ color: C.sub }}>
             點一個日期看細節，或直接登記需求。
           </p>}
@@ -1685,7 +1700,7 @@ function Bar({ ratio, left, paid = 0 }) {
   );
 }
 
-function DayPanel({ date, s, onNew, admin, guest }) {
+function DayPanel({ date, s, onNew, onEdit, admin, guest }) {
   const d = parse(date);
   const wk = "日一二三四五六"[d.getDay()];
   const hol = isHoliday(date);
@@ -1784,19 +1799,34 @@ function DayPanel({ date, s, onNew, admin, guest }) {
 
       {s.eff.length > 0 && (
         <ul className="mt-3 text-sm" style={{ borderTop: `1px solid ${C.line}` }}>
-          {s.eff.map((o) => (
-            <li key={o.id} className="py-2 flex justify-between gap-3 flex-wrap"
-              style={{ borderBottom: `1px solid ${C.line}` }}>
-              <span className={guest ? "tnum" : ""}>
-                {guest ? o.單號 : o.單位}
-                <span className="ml-2 text-xs tnum" style={{ color: C.sub }}>
-                  {o.場次 === "全" ? "全場" : o.場次 + "半場"}
-                  ・{headcount(o)} 人（全票 {o.全票}）
+          {s.eff.map((o) => {
+            const body = (
+              <>
+                <span className={guest ? "tnum" : ""}>
+                  {guest ? o.單號 : o.單位}
+                  <span className="ml-2 text-xs tnum" style={{ color: C.sub }}>
+                    {o.場次 === "全" ? "全場" : o.場次 + "半場"}
+                    ・{headcount(o)} 人（全票 {o.全票}）
+                  </span>
                 </span>
-              </span>
-              {!guest && <span className="text-xs" style={{ color: C.sub }}>{o.狀態}</span>}
-            </li>
-          ))}
+                {!guest && <span className="text-xs" style={{ color: C.sub }}>{o.狀態}</span>}
+              </>
+            );
+            /* 業務可以直接點這一列進去改，不用繞到任務分頁 */
+            return (
+              <li key={o.id} style={{ borderBottom: `1px solid ${C.line}` }}>
+                {!guest && admin && onEdit ? (
+                  <button onClick={() => onEdit(o)}
+                    className="w-full py-2 flex justify-between gap-3 flex-wrap text-left"
+                    title="點一下修改這筆">
+                    {body}
+                  </button>
+                ) : (
+                  <div className="py-2 flex justify-between gap-3 flex-wrap">{body}</div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>
@@ -2660,6 +2690,36 @@ const inp = {
   border: `1px solid ${C.line}`, background: "#fff", fontSize: 14, color: C.ink,
 };
 const Row = ({ children }) => <div className="flex flex-wrap gap-3">{children}</div>;
+/** 壞掉的時候把原因顯示在畫面上，不要整片空白。
+ *  只擋住出錯的那一塊，其他地方還能用。 */
+class Boundary extends React.Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) { console.error(err, info); }
+  render() {
+    if (!this.state.err) return this.props.children;
+    const txt = String((this.state.err && this.state.err.stack) || this.state.err);
+    return (
+      <div className="rounded p-4 my-3" style={{ background: C.badBg, border: `1px solid ${C.badText}` }}>
+        <p className="font-semibold mb-1" style={{ color: C.badText }}>
+          這一塊壞掉了，但你的資料沒事。
+        </p>
+        <p className="text-xs mb-2" style={{ color: C.sub }}>
+          把下面這段複製給我，我就知道是哪裡出問題。其他分頁還能正常使用。
+        </p>
+        <pre className="text-xs p-2 rounded"
+          style={{ background: C.card, border: `1px solid ${C.line}`,
+            whiteSpace: "pre-wrap", wordBreak: "break-all", maxHeight: 220, overflow: "auto" }}>
+          {txt}
+        </pre>
+        <button onClick={() => this.setState({ err: null })}
+          className="mt-2 px-3 py-1.5 text-sm rounded"
+          style={{ border: `1px solid ${C.line}`, background: C.card }}>關掉這個訊息</button>
+      </div>
+    );
+  }
+}
+
 function Field({ label, children, wide }) {
   return (
     <label className="grid gap-1" style={{ flex: wide ? "1 1 100%" : "1 1 8rem", minWidth: "8rem" }}>
