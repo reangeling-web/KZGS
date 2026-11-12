@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v6.1　11/12 歸屬兩層";
+const BUILD = "v6.2　11/12 人數前移";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -3306,10 +3306,13 @@ function ExportView({ orders, say }) {
       狀態: o.狀態,
       預估總營收: est,
 
+      /* 人數組成往前挪，不用捲到最右邊才看得到幾大幾小 */
+      預定總人數: headcount(o),
+      全票: o.全票, 半票: o.半票, 免票: o.免票, 愛心票: o.愛心,
+
       歸屬群組: assignGroup(o.業務歸屬),
       業務歸屬: assignLabel(o.業務歸屬),   /* 散客沒有線，這欄留空，看歸屬群組就好 */
       業務窗口: o.負責窗口 || "",
-      預定總人數: headcount(o),
       已付金額: paid,
       未付金額: Math.max(0, est - paid),
       逾期未收: overdueAmount(payRows(o), todayISO()),
@@ -3323,7 +3326,6 @@ function ExportView({ orders, say }) {
         : (o.包場 ? "包場-" : "") + (o.場次 === "全" ? "全場" : o.場次 + "半場"),
       場次時間: o.日期 ? sessionTime(o.日期, o.場次) : "",
       包場: o.包場 ? "Y" : "N",
-      全票: o.全票, 半票: o.半票, 免票: o.免票, 愛心票: o.愛心,
       餐飲數量: o.餐飲 || 0,
       劇院數量: o.劇院 || 0,
       派對廳數量: o.PR廳數 || 0,
