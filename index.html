@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v5.1　11/06 實虛線";
+const BUILD = "v6.1　11/12 歸屬兩層";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -385,6 +385,75 @@ const saveRow = async (t, row) => {
     ? sb.from(t).update(rest).eq("id", id)
     : sb.from(t).insert(rest);
 };
+
+/** 業務歸屬分成群組與名稱，用半形直線分隔，例如 Group|PP年度採購。
+ *  沒有直線的（舊資料或自己打的）當成沒有群組。 */
+const ASSIGN_SEP = "|";
+/** Group|PP年度採購 → 群組 Group、線 PP年度採購
+ *  Family            → 群組 Family、沒有線（散客底下不分線） */
+const assignGroup = (x) => {
+  const v = String(x || ""), i = v.indexOf(ASSIGN_SEP);
+  return i < 0 ? v : v.slice(0, i);
+};
+const assignLabel = (x) => {
+  const v = String(x || ""), i = v.indexOf(ASSIGN_SEP);
+  return i < 0 ? "" : v.slice(i + 1);
+};
+/** 畫面上要顯示的字：有線就顯示線，沒線就顯示群組 */
+const assignText = (x) => assignLabel(x) || assignGroup(x);
+/** 這些資料裡有哪些群組，保持原本的排序 */
+const assignGroups = (rows) =>
+  [...new Set(rows.map((a) => assignGroup(a.name)).filter(Boolean))];
+/** 某個群組底下的線。沒有線的群組（例如 Family）回空陣列。 */
+const assignLines = (rows, g) =>
+  rows.filter((a) => assignGroup(a.name) === g && assignLabel(a.name));
+/** 依群組分堆，保持原本的排序 */
+const groupAssigns = (rows) => {
+  const out = [];
+  for (const a of rows) {
+    const g = assignGroup(a.name);
+    let bucket = out.find((x) => x.g === g);
+    if (!bucket) { bucket = { g, items: [] }; out.push(bucket); }
+    bucket.items.push(a);
+  }
+  return out;
+};
+
+/** 兩層的業務歸屬選單。群組底下沒有線的話（散客）就只出現一層。 */
+function AssignPicker({ assigns = [], value, onChange, allowEmpty }) {
+  const groups = assignGroups(assigns);
+  const [held, setHeld] = useState("");          // 還沒選到線時，先記住選了哪個群組
+  const g = value ? assignGroup(value) : held;
+  const lines = g ? assignLines(assigns, g) : [];
+
+  const pickGroup = (ng) => {
+    setHeld(ng);
+    const ls = ng ? assignLines(assigns, ng) : [];
+    /* 沒有第二層就直接定案，有第二層先清空等使用者選 */
+    onChange(ls.length ? "" : ng);
+  };
+
+  return (
+    <>
+      <Field label="歸屬群組">
+        <select value={g} style={inp} onChange={(e) => pickGroup(e.target.value)}>
+          <option value="">{allowEmpty ? "未指定" : "請選擇"}</option>
+          {groups.map((x) => <option key={x}>{x}</option>)}
+        </select>
+      </Field>
+      {lines.length > 0 && (
+        <Field label="業務歸屬">
+          <select value={value} style={inp} onChange={(e) => onChange(e.target.value)}>
+            <option value="">請選擇</option>
+            {lines.map((a) => (
+              <option key={a.id} value={a.name}>{assignLabel(a.name)}</option>
+            ))}
+          </select>
+        </Field>
+      )}
+    </>
+  );
+}
 
 /** 報價時這個業務看得到哪些產品：沒設業務歸屬的大家都看得到，有設的只有被標到的人看得到 */
 const repTags = (rep) => (Array.isArray(rep && rep.tags) ? rep.tags : []);
@@ -682,21 +751,29 @@ function RepsView({ rows, assignments = [], onSave, say }) {
             <p className="text-xs mb-1.5" style={{ color: C.sub }}>
               負責的產品線（報價時只會看到勾選的線；沒有設定業務歸屬的共用產品所有人都看得到）
             </p>
-            <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))" }}>
-              {assignments.map((a) => {
-                const on = repTags(edit).includes(a.name);
-                return (
-                  <label key={a.id} className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={on}
-                      style={{ width: 15, height: 15, accentColor: C.brand }}
-                      onChange={(e) => setEdit({ ...edit, tags: e.target.checked
-                        ? [...repTags(edit), a.name]
-                        : repTags(edit).filter((x) => x !== a.name) })} />
-                    <span>{a.name}</span>
-                  </label>
-                );
-              })}
-            </div>
+            {groupAssigns(assignments).map((grp) => (
+              <div key={grp.g || "_"} className="mb-2">
+                {grp.g && (
+                  <p className="text-xs font-medium mb-1" style={{ color: C.brand }}>{grp.g}</p>
+                )}
+                <div className="grid gap-1"
+                  style={{ gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))" }}>
+                  {grp.items.map((a) => {
+                    const on = repTags(edit).includes(a.name);
+                    return (
+                      <label key={a.id} className="flex items-center gap-2 text-sm">
+                        <input type="checkbox" checked={on}
+                          style={{ width: 15, height: 15, accentColor: C.brand }}
+                          onChange={(e) => setEdit({ ...edit, tags: e.target.checked
+                            ? [...repTags(edit), a.name]
+                            : repTags(edit).filter((x) => x !== a.name) })} />
+                        <span>{assignText(a.name)}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
             <div className="flex gap-2 mt-2">
               <button onClick={() => setEdit({ ...edit, tags: assignments.map((a) => a.name) })}
                 className="px-2.5 py-1 text-xs rounded" style={{ border: `1px solid ${C.line}` }}>全選</button>
@@ -896,6 +973,7 @@ function ProductsView({ rows, assignments, onSave, say }) {
   const [edit, setEdit] = useState(null);
   const [busy, setBusy] = useState(false);
   const [newAssign, setNewAssign] = useState("");
+  const [newGroup, setNewGroup] = useState("Group");
   const list = rows.filter((r) => r.kind === kind)
     .filter((r) => match([r.name, r.alias, r.assignment, r.category, r.kind], q));
 
@@ -918,9 +996,12 @@ function ProductsView({ rows, assignments, onSave, say }) {
   };
 
   const addAssignment = async () => {
-    const name = newAssign.trim();
-    if (!name) return;
-    const { error } = await sb.from("assignments").insert({ name, sort: 999 });
+    const raw = newAssign.trim();
+    if (!raw) return;
+    /* 自己打了直線就照原樣存，沒打就補上選的群組 */
+    const name = raw.includes(ASSIGN_SEP) ? raw : `${newGroup}${ASSIGN_SEP}${raw}`;
+    const { error } = await sb.from("assignments")
+      .insert({ name, sort: newGroup === "Group" ? 99 : 199 });
     if (error) return say(clean(error.message));
     setNewAssign(""); say(`已新增業務歸屬「${name}」`); onSave();
   };
@@ -977,16 +1058,31 @@ function ProductsView({ rows, assignments, onSave, say }) {
 
       <div className="rounded p-3 mt-4" style={{ background: C.paper }}>
         <p className="text-xs font-medium mb-2">業務歸屬清單</p>
-        <div className="flex gap-1.5 flex-wrap mb-2">
-          {assignments.map((a) => (
-            <span key={a.id} className="text-xs px-2 py-1 rounded"
-              style={{ background: C.card, border: `1px solid ${C.line}` }}>{a.name}</span>
-          ))}
-        </div>
-        <div className="flex gap-2">
+        {groupAssigns(assignments).map((grp) => (
+          <div key={grp.g || "_"} className="mb-2">
+            {grp.g && (
+              <span className="text-xs mr-2" style={{ color: C.brand, fontWeight: 600 }}>{grp.g}</span>
+            )}
+            <span className="inline-flex gap-1.5 flex-wrap align-middle">
+              {grp.items.map((a) => (
+                <span key={a.id} className="text-xs px-2 py-1 rounded"
+                  style={{ background: C.card, border: `1px solid ${C.line}` }}>
+                  {assignText(a.name)}
+                </span>
+              ))}
+            </span>
+          </div>
+        ))}
+        <div className="flex gap-2 flex-wrap items-center mt-2">
+          <select value={newGroup} onChange={(e) => setNewGroup(e.target.value)}
+            style={{ ...inp, maxWidth: 120 }}>
+            {[...new Set(["Group", "Family",
+              ...assignments.map((a) => assignGroup(a.name)).filter(Boolean)])]
+              .map((g) => <option key={g}>{g}</option>)}
+          </select>
           <input value={newAssign} onChange={(e) => setNewAssign(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && addAssignment()}
-            placeholder="新增一條業務歸屬" style={{ ...inp, maxWidth: 240 }} />
+            placeholder="新增一條業務歸屬" style={{ ...inp, maxWidth: 220 }} />
           <button onClick={addAssignment} className="px-3 py-2 text-sm rounded"
             style={{ border: `1px solid ${C.line}` }}>新增</button>
         </div>
@@ -1007,12 +1103,8 @@ function ProductsView({ rows, assignments, onSave, say }) {
                 {PRODUCT_KINDS.map((x) => <option key={x}>{x}</option>)}
               </select>
             </Field>
-            <Field label="業務歸屬">
-              <select value={edit.assignment} style={inp} onChange={f("assignment")}>
-                <option value="">未指定</option>
-                {assignments.map((a) => <option key={a.id}>{a.name}</option>)}
-              </select>
-            </Field>
+            <AssignPicker assigns={assignments} value={edit.assignment} allowEmpty
+              onChange={(v) => setEdit({ ...edit, assignment: v })} />
           </Row>
 
           <Field label="產品名稱（印在報價單上）" wide>
@@ -2282,12 +2374,8 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
                 ))}
               </select>
             </Field>
-            <Field label="業務歸屬">
-              <select value={f.業務歸屬} onChange={(e) => set("業務歸屬", e.target.value)} style={inp}>
-                <option value="">請選擇</option>
-                {assigns.map((a) => <option key={a.id}>{a.name}</option>)}
-              </select>
-            </Field>
+            <AssignPicker assigns={assigns} value={f.業務歸屬}
+              onChange={(v) => set("業務歸屬", v)} />
             <Field label="客群">
               <select value={f.客群} onChange={(e) => set("客群", e.target.value)} style={inp}>
                 {SEGMENTS.map((x) => <option key={x}>{x}</option>)}
@@ -2696,7 +2784,7 @@ function TaskCard({ o, onMove, onRemove, onEdit, onField, onRestore, onSheet }) 
             </div>
           )}
           <div className="text-xs mt-0.5" style={{ color: C.sub }}>
-            {o.業務歸屬 && <span>{o.業務歸屬}　</span>}
+            {o.業務歸屬 && <span>{assignText(o.業務歸屬)}　</span>}
             {o.負責窗口 && <span style={{ color: C.brand, fontWeight: 600 }}>{o.負責窗口}</span>}
           </div>
           {o.聯絡人 && <div className="text-xs mt-0.5" style={{ color: C.sub }}>
@@ -3218,7 +3306,8 @@ function ExportView({ orders, say }) {
       狀態: o.狀態,
       預估總營收: est,
 
-      業務歸屬: o.業務歸屬 || "",
+      歸屬群組: assignGroup(o.業務歸屬),
+      業務歸屬: assignLabel(o.業務歸屬),   /* 散客沒有線，這欄留空，看歸屬群組就好 */
       業務窗口: o.負責窗口 || "",
       預定總人數: headcount(o),
       已付金額: paid,
