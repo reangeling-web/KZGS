@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v6.3　11/12 流失下沉";
+const BUILD = "v6.5　11/12 統一取消";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -109,8 +109,8 @@ const CAT_RANK = { 活動: 0, 票務: 1, 外訪: 2 };
 const byCatDate = (a, b) =>
   (CAT_RANK[a.類別 || "活動"] ?? 9) - (CAT_RANK[b.類別 || "活動"] ?? 9) ||
   String(a.日期 || "9999-99-99").localeCompare(String(b.日期 || "9999-99-99"));
-/** 匯出：流失與取消的一律壓到最後，其餘依預定日期由近到遠，沒有日期的排最後。 */
-const DEAD_STATES = ["流失"];
+/** 匯出：取消的一律壓到最後，其餘依預定日期由近到遠，沒有日期的排最後。 */
+const DEAD_STATES = ["取消", "流失"];   // 一律用取消；流失是舊資料，留著讓它一樣沉底
 const isDead = (o) => DEAD_STATES.includes(o.狀態);
 const byDate = (a, b) =>
   (isDead(a) ? 1 : 0) - (isDead(b) ? 1 : 0) ||
@@ -232,7 +232,7 @@ const occupies = (o) => HOLD_STATES.includes(o.狀態) && !isExpired(o);
 /** 每個階段用自己的說法數天：當天算第 1 日 */
 const STAGE_WORD = {
   檔期暫留: "已預留", 已報價: "已報價", 已確認: "已簽約",
-  已到訪: "到訪於", 已結案: "結案於", 流失: "流失於",
+  已到訪: "到訪於", 已結案: "結案於", 流失: "流失於", 取消: "取消於",
   籌備中: "籌備中", 行程確認: "行程已確認", 已完成: "完成於",
 };
 /** 單號前 10 碼就是登記日期：KZ20260909… */
@@ -254,7 +254,7 @@ function stageLabel(o) {
     return o.日期 ? `活動倒數 ${Math.max(0, daysBetween(todayISO(), o.日期))} 日` : "行前作業";
   const at = stageStart(o);
   if (!at) return STAGE_WORD[o.狀態] || o.狀態;
-  if (["已到訪", "已結案", "流失"].includes(o.狀態)) return `${STAGE_WORD[o.狀態]} ${at}`;
+  if (["已到訪", "已結案", "流失", "取消"].includes(o.狀態)) return `${STAGE_WORD[o.狀態]} ${at}`;
   return `${STAGE_WORD[o.狀態] || o.狀態} ${daysBetween(at, todayISO()) + 1} 日`;
 }
 
@@ -1338,11 +1338,11 @@ function App() {
     await loadCal();
   };
 
-  /** 流失還原：回到檔期暫留，預留天數從今天重新起算 */
+  /** 取消後還原：團體回到檔期暫留，外訪回到籌備中，天數從今天重新起算 */
   const restore = async (id) => {
     const o = orders.find((x) => x.id === id);
     const log = { ...(o.階段 || {}) };
-    delete log["流失"];
+    delete log["流失"]; delete log["取消"];
     const back = o.類別 === "外訪" ? "籌備中" : "檔期暫留";
     log[back] = todayISO();
     const ok = await patch(id, { status: back, stage_log: log });
@@ -2676,7 +2676,7 @@ function TaskView({ orders, onMove, onRemove, onEdit, onField, onRestore, onNew,
   const toggleCat = (k) => setCats((p) =>
     p.includes(k) ? (p.length > 1 ? p.filter((x) => x !== k) : p) : [...p, k]);
   const pool = orders.filter((o) => cats.includes(o.類別 || "活動"));
-  const END = ["已結案", "流失", "已到訪", "已完成"];
+  const END = ["已結案", "流失", "取消", "已到訪", "已完成"];
   const live = pool.filter((o) => !END.includes(o.狀態)).sort(byCatDate);
   const done = pool.filter((o) => END.includes(o.狀態)).sort(byCatDate);
   const list = filter === "進行中" ? live : done;
@@ -2832,7 +2832,7 @@ function TaskCard({ o, onMove, onRemove, onEdit, onField, onRestore, onSheet }) 
       </label>
 
       <div className="flex gap-2 mt-3 flex-wrap">
-        {o.狀態 === "流失" ? (
+        {isDead(o) ? (
           <button onClick={() => onRestore(o.id)} className="px-2.5 py-1 text-xs rounded"
             style={{ background: C.gold, color: C.ink }}>還原</button>
         ) : (
@@ -2841,9 +2841,10 @@ function TaskCard({ o, onMove, onRemove, onEdit, onField, onRestore, onSheet }) 
               <button onClick={() => onMove(o.id, next)} className="px-2.5 py-1 text-xs rounded"
                 style={{ background: C.brand, color: "#fff" }}>推進到「{next}」</button>
             )}
-            <button onClick={() => onMove(o.id, "流失")} className="px-2.5 py-1 text-xs rounded"
+            <button onClick={() => onMove(o.id, "取消")}
+              className="px-2.5 py-1 text-xs rounded"
               style={{ border: `1px solid ${C.line}`, color: C.sub }}>
-              {isVisit(o) ? "取消這場" : "標記流失"}
+              {isVisit(o) ? "取消這場" : "取消"}
             </button>
           </>
         )}
@@ -3450,7 +3451,7 @@ function ExportView({ orders, say }) {
       </div>
 
       <p className="text-xs mb-3" style={{ color: C.sub }}>
-        依預定日期由近到遠排序，沒有日期的排最後，流失與取消的壓到最底。兩個分頁：預訂名單是逐筆明細，每日現況是名額結果。
+        依預定日期由近到遠排序，沒有日期的排最後，取消的壓到最底。兩個分頁：預訂名單是逐筆明細，每日現況是名額結果。
         之後要接營運部票務系統，照他們的匯入規格改欄名就好。
       </p>
 
