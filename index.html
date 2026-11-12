@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v6.2　11/12 人數前移";
+const BUILD = "v6.3　11/12 流失下沉";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -109,8 +109,11 @@ const CAT_RANK = { 活動: 0, 票務: 1, 外訪: 2 };
 const byCatDate = (a, b) =>
   (CAT_RANK[a.類別 || "活動"] ?? 9) - (CAT_RANK[b.類別 || "活動"] ?? 9) ||
   String(a.日期 || "9999-99-99").localeCompare(String(b.日期 || "9999-99-99"));
-/** 匯出：純依預定日期由近到遠，沒有日期的排最後。 */
+/** 匯出：流失與取消的一律壓到最後，其餘依預定日期由近到遠，沒有日期的排最後。 */
+const DEAD_STATES = ["流失"];
+const isDead = (o) => DEAD_STATES.includes(o.狀態);
 const byDate = (a, b) =>
+  (isDead(a) ? 1 : 0) - (isDead(b) ? 1 : 0) ||
   String(a.日期 || "9999-99-99").localeCompare(String(b.日期 || "9999-99-99"));
 const isTicket = (o) => o.類別 === "票務";
 const isVisit  = (o) => o.類別 === "外訪";
@@ -3447,7 +3450,7 @@ function ExportView({ orders, say }) {
       </div>
 
       <p className="text-xs mb-3" style={{ color: C.sub }}>
-        依預定日期由近到遠排序，沒有日期的排最後。兩個分頁：預訂名單是逐筆明細，每日現況是名額結果。
+        依預定日期由近到遠排序，沒有日期的排最後，流失與取消的壓到最底。兩個分頁：預訂名單是逐筆明細，每日現況是名額結果。
         之後要接營運部票務系統，照他們的匯入規格改欄名就好。
       </p>
 
