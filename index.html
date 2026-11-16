@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v8.1　11/16 行事曆備註";
+const BUILD = "v8.2　11/16 行事曆四欄";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -172,7 +172,9 @@ function isHoliday(dateStr) {
   return d.getDay() === 0 || d.getDay() === 6;
 }
 const calNote = (dateStr) => (CAL_NOTE[dateStr] || "");
+const calFest = (dateStr) => (CAL_FEST[dateStr] || "");
 let CAL_NOTE = {};
+let CAL_FEST = {};
 /** 平日 09:00-20:00、假日 10:00-21:00，各拆成 5H ／ 1H 清場 ／ 5H */
 function sessionTime(dateStr, slot) {
   const hol = isHoliday(dateStr);
@@ -1174,13 +1176,14 @@ function App() {
   const guest = !session;
   const admin = !guest;
   const signedIn = !!session;
-  useEffect(() => { setTab(signedIn ? "首頁" : "檔期"); }, [signedIn]);
 
   const loadCal = async () => {
     const { data } = await sb.from("calendar_days").select("*").order("day");
-    const m = {}, n = {};
-    for (const r of data || []) { m[r.day] = r.kind; n[r.day] = r.note || ""; }
-    setCalendarMap(m); CAL_NOTE = n; setCal(data || []);
+    const m = {}, n = {}, f = {};
+    for (const r of data || []) {
+      m[r.day] = r.kind; n[r.day] = r.note || ""; f[r.day] = r.festival || "";
+    }
+    setCalendarMap(m); CAL_NOTE = n; CAL_FEST = f; setCal(data || []);
   };
   useEffect(() => { loadCal(); }, []);
 
@@ -1284,8 +1287,12 @@ function App() {
   };
 
   const saveCal = async (rows) => {
-    const { error } = await sb.from("calendar_days").upsert(rows, { onConflict: "day" });
-    if (error) { say(clean(error.message)); return false; }
+    /* 整年份一次上傳會是五百多列，分批送，免得一次請求太大 */
+    for (let i = 0; i < rows.length; i += 200) {
+      const { error } = await sb.from("calendar_days")
+        .upsert(rows.slice(i, i + 200), { onConflict: "day" });
+      if (error) { say(clean(error.message)); return false; }
+    }
     await loadCal();
     say(`已更新 ${rows.length} 個日期`);
     return true;
@@ -1665,6 +1672,11 @@ function DayPanel({ date, s, onNew, onEdit, admin, guest }) {
           <span className="ml-2 text-xs font-normal" style={{ color: hol ? C.brand : C.sub }}>
             {hol ? "假日" : "平日"}
           </span>
+          {calFest(date) && (
+            <span className="ml-2 text-xs font-normal" style={{ color: C.sub }}>
+              {calFest(date)}
+            </span>
+          )}
           {calNote(date) && (
             <span className="ml-2 text-sm font-semibold" style={{ color: C.brand }}>
               {calNote(date)}
@@ -2616,7 +2628,22 @@ function TaskCard({ o, onMove, onRemove, onEdit, onField, onRestore }) {
 }
 
 /* ------------------------------------------------------------- 行事曆維護 */
-/** 把上傳或貼上的資料整理成 {day, note, kind}，看不懂的列直接丟掉 */
+/** 認表頭對欄位。認不出來就退回固定順序：日期／平假日／節慶／備註 */
+const CAL_COLS = { day: 0, kind: 1, fest: 2, note: 3 };
+function pickCols(head) {
+  const t = (v) => String(v || "").replace(/\s/g, "");
+  const i = { day: -1, kind: -1, fest: -1, note: -1 };
+  (head || []).forEach((h, k) => {
+    const v = t(h);
+    if (i.day  < 0 && /(年月日|日期|date)/i.test(v)) i.day = k;
+    else if (i.kind < 0 && /平.*假|假.*平/.test(v)) i.kind = k;
+    else if (i.fest < 0 && /(節慶|節日|假日名稱)/.test(v)) i.fest = k;
+    else if (i.note < 0 && /(備註|說明|note)/i.test(v)) i.note = k;
+  });
+  return (i.day >= 0 && i.kind >= 0) ? i : null;
+}
+
+/** 把上傳或貼上的資料整理成 {day, kind, festival, note}，看不懂的列直接丟掉 */
 function parseCalendar(raw) {
   const norm = (v) => {
     if (v instanceof Date) return iso(v);
@@ -2632,12 +2659,14 @@ function parseCalendar(raw) {
     if (/平|工作|上班/.test(t)) return "平日";
     return "";
   };
+  const col = pickCols(raw[0]) || CAL_COLS;
+  const cell = (r, k) => (k >= 0 ? String(r[k] ?? "").trim() : "");
   const out = [], seen = new Set();
   for (const r of raw) {
-    const day = norm(r[0]), kind = kindOf(r[2]);
+    const day = norm(r[col.day]), kind = kindOf(r[col.kind]);
     if (!day || !kind || seen.has(day)) continue;
     seen.add(day);
-    out.push({ day, note: String(r[1] || "").trim(), kind });
+    out.push({ day, kind, festival: cell(r, col.fest), note: cell(r, col.note) });
   }
   return out;
 }
@@ -2645,19 +2674,36 @@ function parseCalendar(raw) {
 function CalendarAdmin({ cal, onSave, onDelete, say }) {
   const [preview, setPreview] = useState(null);
   const [text, setText] = useState("");
-  const [one, setOne] = useState({ day: "", kind: "假日", note: "" });
+  const [one, setOne] = useState({ day: "", kind: "假日", festival: "", note: "" });
   const file = useRef(null);
 
   /** 單筆寫入。同一天重複寫就是覆蓋，和匯入一樣 */
   const saveOne = async () => {
     if (!one.day) { say("先選日期"); return; }
-    if (await onSave([{ day: one.day, kind: one.kind, note: one.note.trim() }]))
-      setOne({ day: "", kind: "假日", note: "" });
+    if (await onSave([{ day: one.day, kind: one.kind,
+                        festival: one.festival.trim(), note: one.note.trim() }]))
+      setOne({ day: "", kind: "假日", festival: "", note: "" });
   };
-  /** 清單裡直接改備註，不用重打整列 */
-  const saveNote = (r, v) => {
-    if (v === (r.note || "")) return;
-    onSave([{ day: r.day, kind: r.kind, note: v.trim() }]);
+  /** 清單裡直接改某一欄，不用重打整列 */
+  const saveField = (r, key, v) => {
+    if (v.trim() === (r[key] || "")) return;
+    onSave([{ day: r.day, kind: r.kind, festival: r.festival || "", note: r.note || "",
+              [key]: v.trim() }]);
+  };
+
+  /** 下載現在這一份。欄名和匯入認得的一樣，改完直接丟回來就會更新 */
+  const download = () => {
+    if (!cal.length) { say("現在還沒有任何定義"); return; }
+    try {
+      const aoa = [["年月日", "平日/假日", "節慶", "備註"],
+        ...cal.map((r) => [r.day, r.kind, r.festival || "", r.note || ""])];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 16 }, { wch: 34 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "平假日清單");
+      XLSX.writeFile(wb, `行事曆_${todayISO()}.xlsx`);
+      say("已下載，改完直接用上面的按鈕丟回來");
+    } catch (e) { say("這個環境擋下了下載"); }
   };
 
   const takeFile = async (e) => {
@@ -2669,7 +2715,8 @@ function CalendarAdmin({ cal, onSave, onDelete, say }) {
       const sh = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sh, { header: 1, raw: true });
       const parsed = parseCalendar(rows);
-      parsed.length ? setPreview(parsed) : say("讀不到可用的資料，請確認三欄順序為 日期／說明／平假日");
+      parsed.length ? setPreview(parsed)
+        : say("讀不到可用的資料，請確認有日期和平假日兩欄");
     } catch (err) {
       say("檔案讀取失敗，請改用貼上");
     }
@@ -2711,9 +2758,15 @@ function CalendarAdmin({ cal, onSave, onDelete, say }) {
               <option>平日</option>
             </select>
           </label>
+          <label className="text-xs" style={{ color: C.sub }}>
+            節慶<br />
+            <input value={one.festival} maxLength={20} placeholder="例：國慶日"
+              onChange={(e) => setOne({ ...one, festival: e.target.value })}
+              style={{ ...inp, width: 140 }} />
+          </label>
           <label className="text-xs flex-1" style={{ color: C.sub, minWidth: 200 }}>
             備註<br />
-            <input value={one.note} maxLength={40} placeholder="國定假日名稱或特殊營業時間"
+            <input value={one.note} maxLength={40} placeholder="例：試營運 09:00–17:00"
               onChange={(e) => setOne({ ...one, note: e.target.value })} style={inp} />
           </label>
           <button onClick={saveOne} className="px-4 py-2 text-sm rounded"
@@ -2722,11 +2775,13 @@ function CalendarAdmin({ cal, onSave, onDelete, say }) {
       </div>
 
       <div className="rounded p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
-        <h2 className="font-semibold">匯入平假日定義</h2>
+        <h2 className="font-semibold">整批匯入／下載</h2>
         <p className="text-xs mt-1 mb-3" style={{ color: C.sub }}>
-          三欄，順序固定：<span className="tnum">日期</span>／說明／平假日。
-          日期可用 2027-01-01 或 2027/1/1；第三欄寫「平日」或「假日」。
-          第一列是標題也沒關係，讀不懂的列會自動略過。同一天重複匯入會覆蓋舊的。
+          四欄：<span className="tnum">年月日</span>／平日假日／節慶／備註。
+          有標題列的話會自動認欄位，順序不同也讀得懂；沒有標題就照這個順序。
+          日期可用 2026-11-24 或 2026/11/24，平假日那欄寫「平日」或「假日」。
+          讀不懂的列自動略過，同一天重複匯入會覆蓋舊的。
+          先按「下載現在這一份」拿到檔案，改完再丟回來，就是最省事的更新方式。
         </p>
 
         <div className="flex gap-2 flex-wrap items-center">
@@ -2735,11 +2790,15 @@ function CalendarAdmin({ cal, onSave, onDelete, say }) {
             上傳 Excel 或 CSV
           </button>
           <input ref={file} type="file" accept=".xlsx,.xls,.csv" onChange={takeFile} className="hidden" />
+          <button onClick={download} className="px-3 py-2 text-sm rounded"
+            style={{ border: `1px solid ${C.brand}`, color: C.brand }}>
+            下載現在這一份
+          </button>
           <span className="text-xs" style={{ color: C.sub }}>或直接貼上 ↓</span>
         </div>
 
         <textarea rows={4} value={text} onChange={(e) => setText(e.target.value)}
-          placeholder={"2027-01-01\t元旦\t假日\n2027-01-02\t\t假日\n2027-01-04\t\t平日"}
+          placeholder={"2026-11-24\t平日\t\t試營運 09:00–17:00\n2026-11-28\t假日\t\t試營運 10:00–18:00"}
           style={{ ...inp, marginTop: 8, fontFamily: "inherit" }} />
         <button onClick={takeText} disabled={!text.trim()}
           className="mt-2 px-3 py-2 text-sm rounded"
@@ -2770,7 +2829,8 @@ function CalendarAdmin({ cal, onSave, onDelete, say }) {
               <li key={r.day} className="tnum flex gap-3">
                 <span style={{ minWidth: "6rem" }}>{r.day}</span>
                 <span style={{ color: r.kind === "假日" ? C.brand : C.sub, minWidth: "3rem" }}>{r.kind}</span>
-                <span style={{ color: C.sub }}>{r.note}</span>
+                <span style={{ color: C.sub, minWidth: "6rem" }}>{r.festival}</span>
+                <span style={{ color: C.brand }}>{r.note}</span>
               </li>
             ))}
           </ul>
@@ -2799,11 +2859,14 @@ function CalendarAdmin({ cal, onSave, onDelete, say }) {
                   style={r.kind === "假日"
                     ? { background: C.badBg, color: C.badText }
                     : { background: C.paper, color: C.sub }}>{r.kind}</span>
+                <input defaultValue={r.festival || ""} maxLength={20} placeholder="節慶"
+                  onBlur={(e) => saveField(r, "festival", e.target.value)}
+                  style={{ ...inp, padding: "3px 7px", fontSize: 12, width: 130 }} />
                 <input defaultValue={r.note || ""} maxLength={40} placeholder="備註"
-                  onBlur={(e) => saveNote(r, e.target.value)}
+                  onBlur={(e) => saveField(r, "note", e.target.value)}
                   className="flex-1"
                   style={{ ...inp, padding: "3px 7px", fontSize: 12,
-                           color: C.brand, maxWidth: 320 }} />
+                           color: C.brand, maxWidth: 300 }} />
                 <button onClick={() => onDelete(r.day)}
                   className="ml-auto px-2 py-1 text-xs rounded" style={{ color: C.badText }}>刪除</button>
               </li>
