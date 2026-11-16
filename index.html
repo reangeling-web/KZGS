@@ -22,7 +22,7 @@ const { useState, useEffect, useMemo, useRef } = React;
 
 /* ------------------------------------------------------------------ 設定 */
 const CAP_TOTAL = 1200;   // 同時在館容留
-const CAP_CHILD = 700;    // 孩童票（3-17 歲）上限　依包場合約第八條
+const CAP_CHILD = 600;    // 孩童票（3-17 歲）上限　全館體驗人數
 const PR_ROOMS = 2;       // Party Room 兩廳
 const PR_PER_ROOM = 25;
 const TH_ROOMS = 1;       // Theater 一廳
@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v8.0　11/16 登入先看週曆";
+const BUILD = "v8.1　11/16 行事曆備註";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -1327,7 +1327,7 @@ function App() {
 
   /* 還沒登記在業務建檔的帳號只有檔期，匯出對他是空白 */
   useEffect(() => {
-    if (!guest && tab !== "首頁" && !myTabs.includes(tab)) setTab(myTabs[0]);
+    if (!guest && TABS.includes(tab) && !myTabs.includes(tab)) setTab(myTabs[0]);
   }, [registered, guest, tab]);
 
   if (session === undefined) return <Splash text="載入中…" />;
@@ -1600,7 +1600,9 @@ function DayCell({ date, s, selected, onClick }) {
       style={{
         background: bo ? C.badBg : C.card,
         minHeight: 76,
-        boxShadow: selected ? `inset 0 0 0 2px ${C.brand}` : "none",
+        /* 有特殊營業時間之類的備註就框紅框，選到的時候框粗一點 */
+        boxShadow: selected ? `inset 0 0 0 2px ${C.brand}`
+          : calNote(date) ? `inset 0 0 0 1.5px ${C.brand}` : "none",
       }}>
       <span className="text-xs tnum" style={{ color: hol ? C.brand : C.sub, fontWeight: hol ? 600 : 400 }}>
         {d.getDate()}
@@ -1663,6 +1665,11 @@ function DayPanel({ date, s, onNew, onEdit, admin, guest }) {
           <span className="ml-2 text-xs font-normal" style={{ color: hol ? C.brand : C.sub }}>
             {hol ? "假日" : "平日"}
           </span>
+          {calNote(date) && (
+            <span className="ml-2 text-sm font-semibold" style={{ color: C.brand }}>
+              {calNote(date)}
+            </span>
+          )}
         </h2>
         {!guest && (
           <button onClick={() => onNew(date)} className="px-3 py-1.5 text-sm rounded"
@@ -2638,7 +2645,20 @@ function parseCalendar(raw) {
 function CalendarAdmin({ cal, onSave, onDelete, say }) {
   const [preview, setPreview] = useState(null);
   const [text, setText] = useState("");
+  const [one, setOne] = useState({ day: "", kind: "假日", note: "" });
   const file = useRef(null);
+
+  /** 單筆寫入。同一天重複寫就是覆蓋，和匯入一樣 */
+  const saveOne = async () => {
+    if (!one.day) { say("先選日期"); return; }
+    if (await onSave([{ day: one.day, kind: one.kind, note: one.note.trim() }]))
+      setOne({ day: "", kind: "假日", note: "" });
+  };
+  /** 清單裡直接改備註，不用重打整列 */
+  const saveNote = (r, v) => {
+    if (v === (r.note || "")) return;
+    onSave([{ day: r.day, kind: r.kind, note: v.trim() }]);
+  };
 
   const takeFile = async (e) => {
     const f = e.target.files?.[0];
@@ -2670,6 +2690,37 @@ function CalendarAdmin({ cal, onSave, onDelete, say }) {
 
   return (
     <>
+      <div className="rounded p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+        <h2 className="font-semibold">單筆設定</h2>
+        <p className="text-xs mt-1 mb-3" style={{ color: C.sub }}>
+          備註會用紅字顯示在檔期那天的日期旁邊，月曆上那一格也會框紅框。
+          特殊營業時間就寫在這裡，例如「10:00–18:00 提前閉館」。
+        </p>
+        <div className="flex gap-2 flex-wrap items-end">
+          <label className="text-xs" style={{ color: C.sub }}>
+            日期<br />
+            <input type="date" value={one.day}
+              onChange={(e) => setOne({ ...one, day: e.target.value })}
+              style={{ ...inp, width: 160 }} />
+          </label>
+          <label className="text-xs" style={{ color: C.sub }}>
+            平假日<br />
+            <select value={one.kind} onChange={(e) => setOne({ ...one, kind: e.target.value })}
+              style={{ ...inp, width: 100 }}>
+              <option>假日</option>
+              <option>平日</option>
+            </select>
+          </label>
+          <label className="text-xs flex-1" style={{ color: C.sub, minWidth: 200 }}>
+            備註<br />
+            <input value={one.note} maxLength={40} placeholder="國定假日名稱或特殊營業時間"
+              onChange={(e) => setOne({ ...one, note: e.target.value })} style={inp} />
+          </label>
+          <button onClick={saveOne} className="px-4 py-2 text-sm rounded"
+            style={{ background: C.brand, color: "#fff" }}>寫入</button>
+        </div>
+      </div>
+
       <div className="rounded p-4 mb-4" style={{ background: C.card, border: `1px solid ${C.line}` }}>
         <h2 className="font-semibold">匯入平假日定義</h2>
         <p className="text-xs mt-1 mb-3" style={{ color: C.sub }}>
@@ -2748,7 +2799,11 @@ function CalendarAdmin({ cal, onSave, onDelete, say }) {
                   style={r.kind === "假日"
                     ? { background: C.badBg, color: C.badText }
                     : { background: C.paper, color: C.sub }}>{r.kind}</span>
-                <span className="text-xs" style={{ color: C.sub }}>{r.note}</span>
+                <input defaultValue={r.note || ""} maxLength={40} placeholder="備註"
+                  onBlur={(e) => saveNote(r, e.target.value)}
+                  className="flex-1"
+                  style={{ ...inp, padding: "3px 7px", fontSize: 12,
+                           color: C.brand, maxWidth: 320 }} />
                 <button onClick={() => onDelete(r.day)}
                   className="ml-auto px-2 py-1 text-xs rounded" style={{ color: C.badText }}>刪除</button>
               </li>
