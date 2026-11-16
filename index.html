@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v8.2　11/16 行事曆四欄";
+const BUILD = "v8.3　11/16 週曆備註";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -2894,6 +2894,32 @@ function weeksOf(from, to) {
     out.push(Array.from({ length: 7 }, (_, i) => addDays(s, i)));
   return out;
 }
+const md = (d) => `${+d.slice(5, 7)}/${+d.slice(8, 10)}`;
+/** 一週的備註收成一行：內容相同的併一組，日期寫前面，
+ *  連續用～、不連續用、，各組之間用；隔開 */
+function noteSummary(days) {
+  const byText = new Map();
+  days.forEach((d) => {
+    const t = calNote(d);
+    if (!t) return;
+    if (!byText.has(t)) byText.set(t, []);
+    byText.get(t).push(d);
+  });
+  const out = [];
+  byText.forEach((ds, t) => {
+    const runs = [];
+    ds.forEach((d) => {
+      const last = runs[runs.length - 1];
+      if (last && addDays(last[last.length - 1], 1) === d) last.push(d);
+      else runs.push([d]);
+    });
+    const label = runs
+      .map((r) => (r.length > 1 ? `${md(r[0])}～${md(r[r.length - 1])}` : md(r[0])))
+      .join("、");
+    out.push(`${label}：${t}`);
+  });
+  return out.join("；");
+}
 const GRID_ROWS = [
   { key: "上", label: "上半場", time: "平日 09:00–14:00　假日 10:00–15:00" },
   { key: "清", label: "中場",   time: "平日 14:00–15:00　假日 15:00–16:00" },
@@ -2981,13 +3007,20 @@ function WeekGrid({ orders, say }) {
   const cellOf = (d, k) => cellOrders(byDay[d] || [], k).slice().sort(cellSort);
   const isBuyout = (d) => (byDay[d] || []).some((o) => o.包場);
   const boCell = (d, k) => inBuyout(d, k, byDay[d] || []);
+  /** 有備註的日期整欄框紅框：表頭補上邊、最後一列補下邊 */
+  const redEdge = (d, pos) => (inRange(d) && calNote(d) ? {
+    borderLeft: `2px solid ${C.brand}`,
+    borderRight: `2px solid ${C.brand}`,
+    ...(pos === "top" ? { borderTop: `2px solid ${C.brand}` } : null),
+    ...(pos === "bottom" ? { borderBottom: `2px solid ${C.brand}` } : null),
+  } : null);
   const dayHead = (d) =>
     `${d.slice(5).replace("-", "/")}（${WD_CH[parse(d).getDay()]}）${isHoliday(d) ? "假日" : "平日"}`;
 
   const toExcel = () => {
     const aoa = [];
     weeks.forEach((wk) => {
-      aoa.push([`${wk[0]} ～ ${wk[6]}`]);
+      aoa.push([`${wk[0]} ～ ${wk[6]}`, noteSummary(wk.filter(inRange))]);
       aoa.push(["時段", ...wk.map((d) =>
         (inRange(d) ? (isBuyout(d) ? "【包場】" : "") + dayHead(d) : ""))]);
       GRID_ROWS.forEach((r) => {
@@ -3055,7 +3088,14 @@ function WeekGrid({ orders, say }) {
           ? <p className="text-sm noprint" style={{ color: C.sub }}>這個區間是空的。</p>
           : weeks.map((wk) => (
             <div key={wk[0]} className="wk mb-5">
-              <div className="text-sm font-semibold mb-1 tnum">{wk[0]} ～ {wk[6]}</div>
+              <div className="text-sm font-semibold mb-1 tnum flex flex-wrap items-baseline gap-x-3">
+                <span>{wk[0]} ～ {wk[6]}</span>
+                {noteSummary(wk.filter(inRange)) && (
+                  <span className="text-xs font-normal" style={{ color: C.brand }}>
+                    {noteSummary(wk.filter(inRange))}
+                  </span>
+                )}
+              </div>
               <div className="overflow-x-auto rounded"
                 style={{ border: `1px solid ${C.line}`, background: C.card }}>
                 <table className="text-xs w-full" style={{ borderCollapse: "collapse" }}>
@@ -3069,7 +3109,8 @@ function WeekGrid({ orders, say }) {
                           style={{ borderBottom: `1px solid ${C.line}`, borderRight: `1px solid ${C.line}`,
                                    fontWeight: 600, width: "13%",
                                    background: inRange(d) && isHoliday(d) ? C.paper : "transparent",
-                                   color: inRange(d) ? C.ink : C.line }}>
+                                   color: inRange(d) ? C.ink : C.line,
+                                   ...redEdge(d, "top") }}>
                           {inRange(d) ? dayHead(d) : ""}
                         </th>
                       ))}
@@ -3096,7 +3137,8 @@ function WeekGrid({ orders, say }) {
                             <td key={d} className="px-1.5 py-1 align-top"
                               style={{ borderBottom: `1px solid ${C.line}`,
                                        borderRight: `1px solid ${C.line}`,
-                                       background: boCell(d, r.key) ? BUYOUT_BG : "transparent" }}>
+                                       background: boCell(d, r.key) ? BUYOUT_BG : "transparent",
+                                       ...redEdge(d, r.key === "下" ? "bottom" : "") }}>
                               <div className="tnum" style={{ color: C.sub, fontSize: 10 }}>
                                 {cellTime(d, r.key, list)}
                               </div>
