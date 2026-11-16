@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v7.4　11/16 包場整欄";
+const BUILD = "v7.5　11/16 包場時間";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -2757,6 +2757,11 @@ const GRID_ROWS = [
 const rowTime = (d, k) => k === "清"
   ? (isHoliday(d) ? "15:00–16:00" : "14:00–15:00")
   : sessionTime(d, k);
+/** 包場是整館，實際幾點到幾點看單子，不照場次的制式時段 */
+function cellTime(d, k, list) {
+  const bo = (list || []).find((o) => o.包場 && o.PR開始);
+  return bo ? `${bo.PR開始}–${bo.PR結束 || ""}` : rowTime(d, k);
+}
 /** 全場在上下半場都要出現；中場只有全場包場會壓住，其餘就是清場 */
 function cellOrders(list, slot) {
   if (slot === "清") return list.filter((o) => o.包場 && o.場次 === "全");
@@ -2818,7 +2823,8 @@ function WeekGrid({ orders, say }) {
           const list = cellOf(d, r.key);
           if (r.key === "清" && !list.length) return `${rowTime(d, r.key)}\n清場`;
           if (!list.length) return rowTime(d, r.key);
-          return [rowTime(d, r.key), ...list.map((o) => cellLines(o).join("\n"))].join("\n");
+          return [cellTime(d, r.key, list),
+                  ...list.map((o) => cellLines(o).join("\n"))].join("\n");
         })]);
       });
       aoa.push([]);
@@ -2917,7 +2923,7 @@ function WeekGrid({ orders, say }) {
                                        borderRight: `1px solid ${C.line}`,
                                        background: isBuyout(d) ? BUYOUT_BG : "transparent" }}>
                               <div className="tnum" style={{ color: C.sub, fontSize: 10 }}>
-                                {rowTime(d, r.key)}
+                                {cellTime(d, r.key, list)}
                               </div>
                               {r.key === "清" && list.length === 0
                                 ? <div style={{ color: C.sub }}>清場</div>
