@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v6.6　11/12 修空日期";
+const BUILD = "v7.0　11/13 週曆";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -102,9 +102,9 @@ const HOLD_STATES = ["檔期暫留", "已報價", "已確認", "行前作業"];
 /** 排序用：越接近成交的排越前面，沒進度的排後面 */
 const money = (n) => (+n || 0).toLocaleString("zh-TW");
 
-/** 單據分三類。票務沒有檔期、外訪是走出去，兩者都不佔名額；活動照舊。 */
-const CATEGORIES = ["活動", "票務", "外訪"];
-const CAT_RANK = { 活動: 0, 票務: 1, 外訪: 2 };
+/** 單據分兩類。票務沒有檔期、不佔名額；活動照舊。 */
+const CATEGORIES = ["活動", "票務"];
+const CAT_RANK = { 活動: 0, 票務: 1 };
 /** 任務列表：先分類別，同類別再依預定日期。沒有日期的排最後。 */
 const byCatDate = (a, b) =>
   (CAT_RANK[a.類別 || "活動"] ?? 9) - (CAT_RANK[b.類別 || "活動"] ?? 9) ||
@@ -116,42 +116,7 @@ const byDate = (a, b) =>
   (isDead(a) ? 1 : 0) - (isDead(b) ? 1 : 0) ||
   String(a.日期 || "9999-99-99").localeCompare(String(b.日期 || "9999-99-99"));
 const isTicket = (o) => o.類別 === "票務";
-const isVisit  = (o) => o.類別 === "外訪";
 
-/** 外訪跑自己的三段，和接單那一套完全分開 */
-const FLOW_VISIT = ["籌備中", "行程確認", "已完成"];
-const flowOf = (o) => (isVisit(o) ? FLOW_VISIT : FLOW);
-
-/** 外訪的內容。校園資料從客戶建檔帶，這裡只存這一場自己的東西。 */
-const VISIT_TYPES = ["園遊會", "體表會", "音樂會", "校慶", "其他"];
-/** 多選欄位一律用頓號串成字串存，舊資料是單一字串也讀得懂 */
-const toList = (v) => Array.isArray(v) ? v.filter(Boolean)
-  : String(v || "").split(/[、,，]/).map((x) => x.trim()).filter(Boolean);
-const toText = (v) => toList(v).join("、");
-const KEYMAN = ["班導師", "家長會", "教務處", "訓育組", "學務處", "旅行社"];
-const blankVisit = () => ({
-  活動類型: [], 進場: "", 開始: "", 撤場: "",
-  攤位: "", 攤位費用: "", 學校提供: "", 預估支出: "", 預估人流: "",
-  曾到訪: "", keyman: [], 引薦來源: "",
-  承辦: [
-    { 角色: "主責業務",   姓名: "", 電話: "", 負責: "學校聯繫、現場總指揮" },
-    { 角色: "協辦人員",   姓名: "", 電話: "", 負責: "互動引導、小物發送" },
-    { 角色: "品牌部窗口", 姓名: "", 電話: "", 負責: "物料與宣傳品準備" },
-    { 角色: "主管核准",   姓名: "", 電話: "", 負責: "活動與費用核准" },
-  ],
-  物品: [],
-  互動: [
-    { 內容: "立牌合影", 做法: "", 人次: "" },
-    { 內容: "追蹤粉專", 做法: "", 人次: "" },
-    { 內容: "預約參訪", 做法: "", 人次: "" },
-    { 內容: "贈送三折頁與貼紙", 做法: "", 人次: "" },
-  ],
-  告示牌: "",
-  成效: { 停留: "", keyman: "", 粉專: "", 預約: "", 名片: "" },
-  檢討: { 好: "", 問題: "", 調整: "", 追蹤: "" },
-});
-const blankGear = () => ({ name: "", 標準: "", 實帶: "", 出發: false, 回收: false, 備註: "" });
-const theVisit = (o) => ({ ...blankVisit(), ...(o.外訪 || {}) });
 
 /** 報價明細：選產品、填數量，算出一個金額。只是試算，不產生任何文件。 */
 const blankItem = () => ({ pid: "", name: "", qty: 1, price: 0 });
@@ -244,7 +209,6 @@ const occupies = (o) => HOLD_STATES.includes(o.狀態) && !isExpired(o);
 const STAGE_WORD = {
   檔期暫留: "已預留", 已報價: "已報價", 已確認: "已簽約",
   已到訪: "到訪於", 已結案: "結案於", 流失: "流失於", 取消: "取消於",
-  籌備中: "籌備中", 行程確認: "行程已確認", 已完成: "完成於",
 };
 /** 單號前 10 碼就是登記日期：KZ20260909… */
 function dateFromOrderNo(no) {
@@ -349,7 +313,6 @@ const toApp = (r) => ({
   階段: r.stage_log || {}, PR開始: r.pr_start || "", PR結束: r.pr_end || "",
   預估營收: r.est_revenue || 0, 收款: r.payments || [],
   類別: r.category || "活動", 明細: Array.isArray(r.items) ? r.items : [],
-  外訪: (r.visit && typeof r.visit === "object") ? r.visit : {},
 });
 
 const DB_MAP = {
@@ -361,7 +324,7 @@ const DB_MAP = {
   備註: "note", 狀態: "status", 建立: "created_on",
   階段: "stage_log", PR開始: "pr_start", PR結束: "pr_end",
   預估營收: "est_revenue", 收款: "payments",
-  類別: "category", 明細: "items", 外訪: "visit",
+  類別: "category", 明細: "items",
 };
 
 const toDb = (o) => {
@@ -642,22 +605,6 @@ function HomeView({ me, onGo }) {
         ))}
       </div>
 
-      <p className="text-xs font-medium mb-2" style={{ color: C.sub, letterSpacing: ".06em" }}>表單介面</p>
-      <div className="grid gap-3 mb-6" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))" }}>
-        <button onClick={() => onGo("表單:出訪單")} className="rounded p-4 text-left"
-          style={{ background: C.card, border: `1px solid ${C.line}` }}>
-          <div className="font-semibold">出訪單</div>
-          <div className="text-xs mt-1" style={{ color: C.sub }}>
-            挑一筆外訪記錄，印成紙本落地企劃，或存成 PDF 附在公出單
-          </div>
-        </button>
-        <button onClick={() => onGo("表單:報價單")} className="rounded p-4 text-left"
-          style={{ background: C.card, border: `1px solid ${C.line}` }}>
-          <div className="font-semibold">報價單</div>
-          <div className="text-xs mt-1" style={{ color: C.sub }}>先架殼，還沒做</div>
-        </button>
-      </div>
-
       <p className="text-xs font-medium mb-2" style={{ color: C.sub, letterSpacing: ".06em" }}>主檔建立</p>
       <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))" }}>
         {master.map((c) => (
@@ -840,7 +787,7 @@ function CustomerForm({ edit, setEdit }) {
       </Row>
 
       <div className="rounded p-3 grid gap-2 mb-3" style={{ background: C.paper }}>
-        <span className="text-xs font-medium">學校資料（外訪單會自動帶出來）</span>
+        <span className="text-xs font-medium">學校資料</span>
         <Row>
           <Field label="公私立">
             <select value={edit.school_type || ""} style={inp} onChange={f("school_type")}>
@@ -1206,9 +1153,7 @@ function App() {
   const [cursor, setCursor] = useState({ y: 2026, m: 12 });
   const [picked, setPicked] = useState(null);
   const [formOpen, setFormOpen] = useState(false);
-  const [formKind, setFormKind] = useState("活動");   // 新單是票務、活動還是外訪
-  const [sheet, setSheet] = useState("出訪單");       // 2 樓現在在哪一張單
-  const [sheetEdit, setSheetEdit] = useState(null);  // 表單頁正在改哪一筆
+  const [formKind, setFormKind] = useState("活動");   // 新單是票務還是活動
   const [editing, setEditing] = useState(null);
   const [lastNo, setLastNo] = useState(null);
   const [toast, setToast] = useState(null);
@@ -1292,18 +1237,16 @@ function App() {
 
   const addOrder = async (o) => {
     const created = todayISO();
-    const first = o.類別 === "外訪" ? "籌備中" : "檔期暫留";
     const rec = {
       ...o,
       單號: makeOrderNo(new Set(orders.map((x) => x.單號))),
       客戶ID: "",
-      狀態: first,
+      狀態: "檔期暫留",
       建立: created,
-      階段: { [first]: created },
+      階段: { 檔期暫留: created },
     };
     /* 票務單沒有檔期，日期與場次要存成空，由 toDb 轉成 null */
     if (rec.類別 === "票務") { rec.日期 = ""; rec.場次 = ""; }
-    if (rec.類別 === "外訪") rec.場次 = "";
     const { data, error } = await sb.from("bookings").insert(toDb(rec)).select().single();
     if (error) { say(clean(error.message)); return null; }
     setFormOpen(false); setPicked(o.日期 || null); setLastNo(rec.單號);
@@ -1349,15 +1292,14 @@ function App() {
     await loadCal();
   };
 
-  /** 取消後還原：團體回到檔期暫留，外訪回到籌備中，天數從今天重新起算 */
+  /** 取消後還原：回到檔期暫留，天數從今天重新起算 */
   const restore = async (id) => {
     const o = orders.find((x) => x.id === id);
     const log = { ...(o.階段 || {}) };
     delete log["流失"]; delete log["取消"];
-    const back = o.類別 === "外訪" ? "籌備中" : "檔期暫留";
-    log[back] = todayISO();
-    const ok = await patch(id, { status: back, stage_log: log });
-    if (ok) say(o.類別 === "外訪" ? "已還原為籌備中" : "已還原為檔期暫留，名額重新佔用");
+    log["檔期暫留"] = todayISO();
+    const ok = await patch(id, { status: "檔期暫留", stage_log: log });
+    if (ok) say("已還原為檔期暫留，名額重新佔用");
   };
 
   const remove = async (id) => {
@@ -1446,8 +1388,6 @@ function App() {
             if (k === "新增票務" || k === "新增活動") {
               setFormKind(k === "新增票務" ? "票務" : "活動");
               setPicked(null); setEditing(null); setFormOpen(true); setTab("任務");
-            } else if (k.startsWith("表單:")) {
-              setSheet(k.slice(3)); setSheetEdit(null); setTab("表單");
             } else setTab(k);
           }} />
         )}
@@ -1462,35 +1402,10 @@ function App() {
         {tab === "任務" && admin && (
           <TaskView orders={orders} onMove={move} onRemove={remove} onEdit={setEditing}
             onField={setField} onRestore={restore}
-            onNew={(k) => {
-              if (k === "外訪") { setSheet("出訪單"); setSheetEdit(null); setTab("表單"); return; }
-              setFormKind(k); setPicked(null); setEditing(null); setFormOpen(true);
-            }}
-            onSheet={(o) => { setSheet("出訪單"); setSheetEdit(o); setTab("表單"); }} />
+            onNew={(k) => { setFormKind(k); setPicked(null); setEditing(null); setFormOpen(true); }} />
         )}
         {tab === "行事曆" && admin && (
           <CalendarAdmin cal={cal} onSave={saveCal} onDelete={delCal} say={say} />
-        )}
-        {tab === "表單" && admin && registered && (
-          <FormsView
-            sheet={sheet} setSheet={setSheet}
-            orders={orders} customers={customers} reps={reps} assigns={assigns}
-            products={products} me={me} say={say}
-            editing={sheetEdit} setEditing={setSheetEdit}
-            onSubmit={async (o) => {
-              if (sheetEdit) {
-                await updateOrder({ ...sheetEdit, ...o });
-                say("已儲存，下面的出訪單同步更新");
-              } else {
-                const rec = await addOrder(o);
-                if (rec) setSheetEdit(rec);
-              }
-            }}
-            onSaveAsNew={async (o) => {
-              const { id, 單號, 階段, 建立, ...rest } = o;
-              const rec = await addOrder({ ...rest, 類別: "外訪" });
-              if (rec) { setSheetEdit(rec); say("已另存為新的一場"); }
-            }} />
         )}
         {tab === "匯出" && admin && <ExportView orders={orders} say={say} />}
 
@@ -1539,17 +1454,20 @@ const CSS = `
   input, select, textarea { font-family: inherit; }
   @media (prefers-reduced-motion: reduce) { .toast { animation: none } }
 
-  /* 列印：只留表單介面那張單，畫面上的其他東西全部不印 */
+  /* 列印：橫式 A4，一週一頁，畫面上其他東西全部不印 */
   @media print {
-    @page { size: A4; margin: 12mm 10mm; }
+    @page { size: A4 landscape; margin: 8mm; }
     html, body { background: #fff !important; }
-    header, .toast { display: none !important; }
-    main { max-width: none !important; margin: 0 !important; padding: 0 !important; }
-    main > *:not(#sheetbox) { display: none !important; }
-    #sheetbox { border: 0 !important; padding: 0 !important; border-radius: 0 !important; }
-    #sheetbox table { page-break-inside: auto; }
-    #sheetbox tr    { page-break-inside: avoid; }
-    #sheetbox thead { display: table-header-group; }
+    body.printweek * { visibility: hidden !important; }
+    body.printweek #weekbox, body.printweek #weekbox * { visibility: visible !important; }
+    body.printweek #weekbox .noprint { display: none !important; }
+    body.printweek #weekbox {
+      position: absolute !important; left: 0; top: 0; width: 100%;
+      border: 0 !important; padding: 0 !important; background: #fff !important;
+    }
+    #weekbox .wk { page-break-after: always; break-after: page; }
+    #weekbox .wk:last-child { page-break-after: auto; break-after: auto; }
+    #weekbox table { page-break-inside: avoid; break-inside: avoid; }
   }
 `;
 
@@ -1931,194 +1849,6 @@ function Sec({ t, children, right }) {
   );
 }
 
-/** 外訪內容：活動資訊、承辦人、物品清單、互動橋段、成效檢討 */
-function VisitBox({ v, setV, products = [] }) {
-  const gear = v.物品 || [];
-  const pool = products.filter((x) => x.kind === "其他" && x.active !== false);
-  const setGear = (i, k, val) => setV("物品", gear.map((g, j) => j === i ? { ...g, [k]: val } : g));
-  const addGear = () => setV("物品", [...gear, blankGear()]);
-  const delGear = (i) => setV("物品", gear.filter((_, j) => j !== i));
-  /** 把產品建檔「其他」類整批帶進來，帶進來之後還能增刪改 */
-  const fillGear = () => setV("物品", pool.map((x) => ({
-    ...blankGear(), name: x.name, 標準: x.min_qty || "", 備註: x.remark || "" })));
-
-  const setRole = (i, k, val) =>
-    setV("承辦", (v.承辦 || []).map((r, j) => j === i ? { ...r, [k]: val } : r));
-  const setAct = (i, k, val) =>
-    setV("互動", (v.互動 || []).map((r, j) => j === i ? { ...r, [k]: val } : r));
-  const addAct = () => setV("互動", [...(v.互動 || []), { 內容: "", 做法: "", 人次: "" }]);
-  const delAct = (i) => setV("互動", (v.互動 || []).filter((_, j) => j !== i));
-
-  const cell = { ...inp, padding: "5px 7px", fontSize: 13 };
-
-  return (
-    <>
-      <Sec t="活動資訊">
-        <Row>
-          <Field label="進場時間">
-            <input type="time" lang="en-GB" value={v.進場}
-              onChange={(e) => setV("進場", e.target.value)} style={inp} />
-          </Field>
-          <Field label="開始時間">
-            <input type="time" lang="en-GB" value={v.開始}
-              onChange={(e) => setV("開始", e.target.value)} style={inp} />
-          </Field>
-          <Field label="撤場時間">
-            <input type="time" lang="en-GB" value={v.撤場}
-              onChange={(e) => setV("撤場", e.target.value)} style={inp} />
-          </Field>
-        </Row>
-        <CheckRow label="活動類型（可複選）" options={VISIT_TYPES}
-          value={v.活動類型} onChange={(x) => setV("活動類型", x)} />
-        <Row>
-          <Field label="攤位位置／編號">
-            <input value={v.攤位} onChange={(e) => setV("攤位", e.target.value)} style={inp} />
-          </Field>
-          <Field label="攤位費用與規定">
-            <input value={v.攤位費用} onChange={(e) => setV("攤位費用", e.target.value)}
-              placeholder="家長會招商" style={inp} />
-          </Field>
-          <Field label="預估人流">
-            <input value={v.預估人流} onChange={(e) => setV("預估人流", e.target.value)} style={inp} />
-          </Field>
-        </Row>
-        <Row>
-          <Field label="學校提供（桌椅／電源／帳篷）" wide>
-            <input value={v.學校提供} onChange={(e) => setV("學校提供", e.target.value)}
-              placeholder="學校實際提供什麼" style={inp} />
-          </Field>
-        </Row>
-        <Row>
-          <Field label="預估支出">
-            <input type="number" min="0" value={v.預估支出} className="tnum"
-              onChange={(e) => setV("預估支出", e.target.value)} style={inp} />
-          </Field>
-        </Row>
-        <p className="text-xs" style={{ color: C.sub }}>
-          學校沒提供、要自己張羅的部分。這筆金額不進營收統計，匯出會獨立一欄。
-        </p>
-      </Sec>
-
-      <Sec t="合作紀錄">
-        <Row>
-          <Field label="曾到訪 KZ 或辦過校外教學">
-            <input value={v.曾到訪} onChange={(e) => setV("曾到訪", e.target.value)}
-              placeholder="否，或填年份" style={inp} />
-          </Field>
-          <Field label="引薦來源">
-            <input value={v.引薦來源} onChange={(e) => setV("引薦來源", e.target.value)} style={inp} />
-          </Field>
-        </Row>
-        <CheckRow label="可能的 Key man（可複選）" options={KEYMAN}
-          value={v.keyman} onChange={(x) => setV("keyman", x)} />
-      </Sec>
-
-      <Sec t="KZ 承辦人">
-        {(v.承辦 || []).map((r, i) => (
-          <div key={i} className="grid gap-1.5 items-center"
-            style={{ gridTemplateColumns: "88px 1fr 110px 1.3fr" }}>
-            <span className="text-xs" style={{ color: C.sub }}>{r.角色}</span>
-            <input value={r.姓名} placeholder="姓名"
-              onChange={(e) => setRole(i, "姓名", e.target.value)} style={cell} />
-            <input value={r.電話} placeholder="電話"
-              onChange={(e) => setRole(i, "電話", e.target.value)} style={cell} />
-            <input value={r.負責} placeholder="負責事項"
-              onChange={(e) => setRole(i, "負責", e.target.value)} style={cell} />
-          </div>
-        ))}
-      </Sec>
-
-      <Sec t="物品清單（道具與宣傳小物）"
-        right={
-          <button onClick={fillGear} className="px-2.5 py-1 text-xs rounded"
-            style={{ border: `1px solid ${C.brand}`, color: C.brand }}>
-            帶入預設清單（{pool.length} 項）
-          </button>
-        }>
-        <div className="grid gap-1 text-xs" style={{ color: C.sub,
-          gridTemplateColumns: "1.6fr 58px 58px 40px 40px 1.2fr 24px" }}>
-          <span>品項</span><span>標準</span><span>實帶</span>
-          <span className="text-center">出發</span><span className="text-center">回收</span>
-          <span>備註</span><span></span>
-        </div>
-        {gear.map((g, i) => (
-          <div key={i} className="grid gap-1 items-center"
-            style={{ gridTemplateColumns: "1.6fr 58px 58px 40px 40px 1.2fr 24px" }}>
-            <input list="gearlist" value={g.name} placeholder="品項"
-              onChange={(e) => setGear(i, "name", e.target.value)} style={cell} />
-            <input value={g.標準} onChange={(e) => setGear(i, "標準", e.target.value)} style={cell} />
-            <input value={g.實帶} onChange={(e) => setGear(i, "實帶", e.target.value)} style={cell} />
-            <span className="text-center">
-              <input type="checkbox" checked={!!g.出發} onChange={(e) => setGear(i, "出發", e.target.checked)}
-                style={{ width: 15, height: 15, accentColor: C.brand }} />
-            </span>
-            <span className="text-center">
-              <input type="checkbox" checked={!!g.回收} onChange={(e) => setGear(i, "回收", e.target.checked)}
-                style={{ width: 15, height: 15, accentColor: C.brand }} />
-            </span>
-            <input value={g.備註} onChange={(e) => setGear(i, "備註", e.target.value)} style={cell} />
-            <button onClick={() => delGear(i)} className="text-base leading-none"
-              style={{ color: C.sub }}>×</button>
-          </div>
-        ))}
-        <datalist id="gearlist">
-          {pool.map((x) => <option key={x.id} value={x.name} />)}
-        </datalist>
-        <button onClick={addGear} className="px-3 py-1.5 text-xs rounded self-start"
-          style={{ border: `1px solid ${C.line}` }}>＋ 新增一項</button>
-        <p className="text-xs" style={{ color: C.sub }}>
-          出發前逐項打勾，撤場時再確認一次是否全數帶回。清單來自產品建檔的「其他」類。
-        </p>
-      </Sec>
-
-      <Sec t="現場互動橋段">
-        <div className="grid gap-1 text-xs" style={{ color: C.sub,
-          gridTemplateColumns: "28px 1.2fr 2fr 62px 24px" }}>
-          <span></span><span>互動內容</span><span>本場做法／話術</span><span>人次</span><span></span>
-        </div>
-        {(v.互動 || []).map((r, i) => (
-          <div key={i} className="grid gap-1 items-center"
-            style={{ gridTemplateColumns: "28px 1.2fr 2fr 62px 24px" }}>
-            <span className="text-xs text-center" style={{ color: C.sub }}>{i + 1}</span>
-            <input value={r.內容} onChange={(e) => setAct(i, "內容", e.target.value)} style={cell} />
-            <input value={r.做法} onChange={(e) => setAct(i, "做法", e.target.value)} style={cell} />
-            <input value={r.人次} onChange={(e) => setAct(i, "人次", e.target.value)} style={cell} />
-            <button onClick={() => delAct(i)} className="text-base leading-none"
-              style={{ color: C.sub }}>×</button>
-          </div>
-        ))}
-        <button onClick={addAct} className="px-3 py-1.5 text-xs rounded self-start"
-          style={{ border: `1px solid ${C.line}` }}>＋ 新增一步</button>
-        <Field label="本場告示牌文案" wide>
-          <input value={v.告示牌} onChange={(e) => setV("告示牌", e.target.value)} style={inp} />
-        </Field>
-      </Sec>
-
-      <Sec t="事後成效與檢討">
-        <Row>
-          {[["停留", "攤位停留人次"], ["keyman", "接觸 Key man"], ["粉專", "新增粉專追蹤"],
-            ["預約", "預約參訪組數"], ["名片", "取得名片／名單"]].map(([k, lab]) => (
-            <Field key={k} label={lab}>
-              <input value={(v.成效 || {})[k] || ""} style={inp}
-                onChange={(e) => setV("成效", { ...(v.成效 || {}), [k]: e.target.value })} />
-            </Field>
-          ))}
-        </Row>
-        {[["好", "做得好的地方"], ["問題", "遇到的問題"],
-          ["調整", "下次要調整（道具／小物／互動／人力）"], ["追蹤", "後續追蹤"]].map(([k, lab]) => (
-          <Field key={k} label={lab} wide>
-            <textarea rows={2} value={(v.檢討 || {})[k] || ""} style={inp}
-              onChange={(e) => setV("檢討", { ...(v.檢討 || {}), [k]: e.target.value })} />
-          </Field>
-        ))}
-        <p className="text-xs" style={{ color: C.sub }}>
-          活動結束後 3 天內填寫。累積幾場之後就比得出哪種學校與活動類型效果最好。
-        </p>
-      </Sec>
-    </>
-  );
-}
-
 /** 報價明細：選產品算金額。只是試算，不產生任何文件，也不是報價單。 */
 function ItemsBox({ f, products = [], ticket, setItem, addItem, delItem, useTotal }) {
   const rows = f.明細 || [];
@@ -2193,16 +1923,14 @@ function ItemsBox({ f, products = [], ticket, setItem, addItem, delItem, useTota
 /* ------------------------------------------------------------ 需求登記 */
 function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動",
                       customers = [], reps = [], assigns = [], products = [],
-                      me, onCustomerSaved, say, inline, onSaveAsNew }) {
+                      me, onCustomerSaved, say }) {
   const [newCust, setNewCust] = useState(null);
   const [f, setF] = useState(() => editing
     ? { ...editing, 業務窗口: editing.業務窗口 || editing.負責窗口 || "",
         類別: editing.類別 || "活動", 明細: editing.明細 || [],
-        外訪: editing.類別 === "外訪" ? theVisit(editing) : (editing.外訪 || {}),
         收款: payRows(editing).length ? payRows(editing) : [blankPay()] }
     : {
     類別: kind, 明細: kind === "票務" ? [blankItem()] : [],
-    外訪: kind === "外訪" ? blankVisit() : {},
     客戶id: "", 單位: "", 客群: "學校", 業務歸屬: "",
     業務窗口: (me && me.name) || "", 聯絡人: "", 電話: "",
     日期: kind === "票務" ? "" : (date || todayISO()),
@@ -2213,8 +1941,7 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
     收款: [blankPay()], 備註: "",
   });
   const ticket = f.類別 === "票務";
-  const visit  = f.類別 === "外訪";
-  const setV = (k, val) => setF((p) => ({ ...p, 外訪: { ...theVisit(p), [k]: val } }));
+
   const set = (k, v) => setF((p) => {
     const n = { ...p, [k]: v };
     if (!n.包場 && n.場次 === "全" && isHoliday(n.日期)) n.場次 = "上";
@@ -2230,12 +1957,6 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
       if (!c) return { ...p, 客戶id: "" };
       const nx = { ...p, 客戶id: id, 單位: c.org, 客群: c.segment || p.客群,
         聯絡人: c.contact || p.聯絡人, 電話: c.phone || c.mobile || p.電話 };
-      /* 外訪：預估人流沒填過才帶入學生人數，已經填的不蓋掉 */
-      if (p.類別 === "外訪") {
-        const vv = theVisit(p);
-        if (!String(vv.預估人流 || "").trim() && c.students)
-          nx.外訪 = { ...vv, 預估人流: String(c.students) };
-      }
       return nx;
     });
   };
@@ -2306,18 +2027,12 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
   if (!f.業務歸屬) errors.push("選一個業務歸屬");
 
   const overlaps = (a, b) => a === "全" || b === "全" || a === b;
-  const lock = (ticket || visit) ? null
+  const lock = ticket ? null
     : (f.場次 === "上" ? s.amLock : f.場次 === "下" ? s.pmLock : (s.amLock || s.pmLock));
 
   if (ticket) {
     /* 票務單不碰檔期，只檢查有沒有東西可賣 */
     if (!(f.明細 || []).some((r) => r.name)) errors.push("票務單至少要有一列明細");
-  } else if (visit) {
-    /* 外訪有日期但不佔名額，只檢查最低限度 */
-    if (!f.日期) errors.push("外訪要填活動日期");
-    const vt = toList(theVisit(f).活動類型);
-    if (!vt.length) errors.push("至少選一個活動類型");
-    if (vt.includes("其他")) errors.push("活動類型勾了「其他」，請填寫內容");
   } else {
     if (!f.日期) errors.push("活動單要填到訪日期");
     if (!f.包場 && f.場次 === "全" && isHoliday(f.日期))
@@ -2351,20 +2066,20 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
 
   const box = useRef(null);
   useEffect(() => {
-    if (!inline) box.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [inline]);
+    box.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
 
   return (
-    <div ref={box} className={inline ? "rounded" : "mt-4 rounded scroll-mt-4"}
-      style={{ background: C.card, border: `1px solid ${inline ? C.line : C.brand}` }}>
+    <div ref={box} className="mt-4 rounded scroll-mt-4"
+      style={{ background: C.card, border: `1px solid ${C.brand}` }}>
       <div>
 
-        <div className={inline ? "hidden" : "px-4 py-3 flex items-center justify-between"}
+        <div className="px-4 py-3 flex items-center justify-between"
           style={{ background: C.card, borderBottom: `1px solid ${C.line}` }}>
           <h2 className="font-semibold">
             {editing
-              ? `修改${ticket ? "票務單" : visit ? "外訪" : "需求"}　${editing.客戶ID}`
-              : (ticket ? "新增票務單" : visit ? "新增外訪" : "登記團體需求")}
+              ? `修改${ticket ? "票務單" : "需求"}　${editing.客戶ID}`
+              : (ticket ? "新增票務單" : "登記團體需求")}
             <span className="ml-2 text-xs font-normal px-2 py-0.5 rounded"
               style={{ background: ticket ? C.card : C.brand,
                        color: ticket ? C.brand : "#fff",
@@ -2429,22 +2144,7 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
             </div>
           )}
 
-          {visit && (
-            <div className="rounded p-3" style={{ background: C.paper }}>
-              <Row>
-                <Field label="活動日期">
-                  <input type="date" value={f.日期}
-                    onChange={(e) => set("日期", e.target.value)} style={inp} />
-                </Field>
-              </Row>
-              <p className="text-xs mt-2" style={{ color: C.sub }}>
-                外訪是走出去，不佔樂園名額、不進月曆。上面的客戶欄選學校，
-                校園資料會從客戶建檔帶出來，同一間學校辦第二場不用重打。
-              </p>
-            </div>
-          )}
-
-          {!ticket && !visit && (
+          {!ticket && (
           <div className="rounded p-3" style={{ background: C.paper }}>
             <Row>
               <Field label="到訪日期">
@@ -2470,7 +2170,7 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
           </div>
           )}
 
-          {!ticket && !visit && (
+          {!ticket && (
           <Row>
             <Field label="全票 3-17 歲">
               <input type="number" min="0" value={f.全票} onChange={(e) => set("全票", e.target.value)} style={inp} />
@@ -2487,7 +2187,7 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
           </Row>
           )}
 
-          {!ticket && !visit && (
+          {!ticket && (
           <div className="rounded p-3 grid gap-2" style={{ background: C.paper }}>
             <div className="flex items-baseline justify-between">
               <span className="text-xs font-medium">加購品項</span>
@@ -2545,14 +2245,9 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
           </div>
           )}
 
-          {!visit && (
-            <ItemsBox f={f} products={products} ticket={ticket}
-              setItem={setItem} addItem={addItem} delItem={delItem} useTotal={useItemsTotal} />
-          )}
+          <ItemsBox f={f} products={products} ticket={ticket}
+            setItem={setItem} addItem={addItem} delItem={delItem} useTotal={useItemsTotal} />
 
-          {visit && <VisitBox v={theVisit(f)} setV={setV} products={products} />}
-
-          {!visit && (
           <div className="rounded p-3 grid gap-2" style={{ background: C.paper }}>
             <div className="flex items-baseline justify-between flex-wrap gap-2">
               <span className="text-xs font-medium">金額與收款（最多 {PAY_MAX} 列）</span>
@@ -2614,7 +2309,6 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
               保證金可退，不計入預估營收。勾了「已付款」才算已付。
             </p>
           </div>
-          )}
 
           <Field label="備註" wide>
             <textarea rows={2} value={f.備註} onChange={(e) => set("備註", e.target.value)} style={inp} />
@@ -2631,46 +2325,30 @@ function RequestForm({ date, orders, editing, onClose, onSubmit, kind = "活動"
               ? `狀態維持「${editing.狀態}」，${ticket ? "票務單不影響名額。" : "名額會依新內容重算。"}`
               : ticket
                 ? "送出後進任務列表，和活動單同一份清單，可以用類別篩選。不佔名額、不進月曆。"
-                : visit
-                  ? "送出後狀態是「籌備中」，之後推進到行程確認、已完成。可以在表單介面印出訪單。"
-                  : "送出後檔期進入預留並開始計算天數。要不要卸下檔期由業務自行判斷，系統不會自動釋出。"}
+                : "送出後檔期進入預留並開始計算天數。要不要卸下檔期由業務自行判斷，系統不會自動釋出。"}
           </p>
         </div>
 
         <div className="px-4 py-3 flex gap-2 flex-wrap"
           style={{ background: C.card, borderTop: `1px solid ${C.line}` }}>
-          {inline ? <span className="flex-1" /> : (
-            <button onClick={onClose} className="px-4 py-2 text-sm rounded flex-1"
-              style={{ border: `1px solid ${C.line}` }}>取消</button>
-          )}
-          {inline && editing && onSaveAsNew && (
-            <button disabled={errors.length > 0}
-              onClick={() => onSaveAsNew({ ...f, 負責窗口: f.業務窗口, 收款: [], 明細: [],
-                外訪: theVisit(f), 預估營收: 0, 場次: "", 包場: false,
-                全票: 0, 半票: 0, 免票: 0, 愛心: 0, 餐飲: 0, 劇院: 0, PR廳數: 0 })}
-              className="px-4 py-2 text-sm rounded"
-              style={errors.length ? { border: `1px solid ${C.line}`, color: C.sub }
-                                   : { border: `1px solid ${C.brand}`, color: C.brand }}>
-              另存為新的一場
-            </button>
-          )}
+          <button onClick={onClose} className="px-4 py-2 text-sm rounded flex-1"
+            style={{ border: `1px solid ${C.line}` }}>取消</button>
           <button disabled={errors.length > 0}
-            onClick={() => { const flat = ticket || visit; onSubmit({ ...f, 負責窗口: f.業務窗口,
-              收款: visit ? [] : (f.收款 || []).filter((r) => +r.金額 > 0),
-              明細: visit ? [] : (f.明細 || []).filter((r) => r.name),
-              外訪: visit ? theVisit(f) : {},
-              預估營收: visit ? 0 : estRevenue(f.收款 || []),
-              日期: ticket ? "" : f.日期, 場次: flat ? "" : f.場次,
-              包場: flat ? false : f.包場,
-              全票: flat ? 0 : +f.全票 || 0, 半票: flat ? 0 : +f.半票 || 0,
-              免票: flat ? 0 : +f.免票 || 0, 愛心: flat ? 0 : +f.愛心 || 0,
-              餐飲: flat ? 0 : +f.餐飲 || 0,
-              劇院: flat ? 0 : +f.劇院 || 0, PR廳數: flat ? 0 : +f.PR廳數 || 0 }); }}
-            className={inline ? "px-5 py-2 text-sm rounded" : "px-4 py-2 text-sm rounded flex-1"}
+            onClick={() => onSubmit({ ...f, 負責窗口: f.業務窗口,
+              收款: (f.收款 || []).filter((r) => +r.金額 > 0),
+              明細: (f.明細 || []).filter((r) => r.name),
+              預估營收: estRevenue(f.收款 || []),
+              日期: ticket ? "" : f.日期, 場次: ticket ? "" : f.場次,
+              包場: ticket ? false : f.包場,
+              全票: ticket ? 0 : +f.全票 || 0, 半票: ticket ? 0 : +f.半票 || 0,
+              免票: ticket ? 0 : +f.免票 || 0, 愛心: ticket ? 0 : +f.愛心 || 0,
+              餐飲: ticket ? 0 : +f.餐飲 || 0,
+              劇院: ticket ? 0 : +f.劇院 || 0, PR廳數: ticket ? 0 : +f.PR廳數 || 0 })}
+            className="px-4 py-2 text-sm rounded flex-1"
             style={errors.length
               ? { background: C.line, color: C.sub }
               : { background: C.brand, color: "#fff" }}>
-            {editing ? "儲存修改" : (ticket ? "建立票務單" : visit ? "新增" : "登記並暫留檔期")}
+            {editing ? "儲存修改" : (ticket ? "建立票務單" : "登記並暫留檔期")}
           </button>
         </div>
       </div>
@@ -2730,7 +2408,7 @@ function Field({ label, children, wide }) {
 }
 
 /* ---------------------------------------------------------------- 任務板 */
-function TaskView({ orders, onMove, onRemove, onEdit, onField, onRestore, onNew, onSheet }) {
+function TaskView({ orders, onMove, onRemove, onEdit, onField, onRestore, onNew }) {
   const [filter, setFilter] = useState("進行中");
   const [cats, setCats] = useState(CATEGORIES);          // 勾哪些就看哪些
   const toggleCat = (k) => setCats((p) =>
@@ -2746,15 +2424,11 @@ function TaskView({ orders, onMove, onRemove, onEdit, onField, onRestore, onNew,
       <div className="rounded p-8 text-center" style={{ background: C.card, border: `1px dashed ${C.line}` }}>
         <p className="font-medium">還沒有任何單</p>
         <p className="text-sm mt-1 mb-3" style={{ color: C.sub }}>
-          有檔期的到「檔期」頁點日期登記；沒有檔期的直接建票務單或外訪。
+          有檔期的到「檔期」頁點日期登記，沒有檔期的直接建票務單。
         </p>
         {onNew && (
-          <div className="flex gap-2 justify-center">
-            <button onClick={() => onNew("票務")} className="px-4 py-2 text-sm rounded"
-              style={{ border: `1px solid ${C.brand}`, color: C.brand }}>新增票務單</button>
-            <button onClick={() => onNew("外訪")} className="px-4 py-2 text-sm rounded"
-              style={{ background: C.brand, color: "#fff" }}>新增外訪</button>
-          </div>
+          <button onClick={() => onNew("票務")} className="px-4 py-2 text-sm rounded"
+            style={{ background: C.brand, color: "#fff" }}>新增票務單</button>
         )}
       </div>
     );
@@ -2787,12 +2461,8 @@ function TaskView({ orders, onMove, onRemove, onEdit, onField, onRestore, onNew,
         })}
         <span className="flex-1" />
         {onNew && (
-          <>
-            <button onClick={() => onNew("票務")} className="px-3 py-1.5 text-sm rounded"
-              style={{ border: `1px solid ${C.brand}`, color: C.brand }}>新增票務單</button>
-            <button onClick={() => onNew("外訪")} className="px-3 py-1.5 text-sm rounded"
-              style={{ background: C.brand, color: "#fff" }}>新增外訪</button>
-          </>
+          <button onClick={() => onNew("票務")} className="px-3 py-1.5 text-sm rounded"
+            style={{ background: C.brand, color: "#fff" }}>新增票務單</button>
         )}
       </div>
 
@@ -2801,17 +2471,16 @@ function TaskView({ orders, onMove, onRemove, onEdit, onField, onRestore, onNew,
         : <ul className="grid gap-2">
             {list.map((o) => (
               <TaskCard key={o.id} o={o} onMove={onMove} onRemove={onRemove} onEdit={onEdit}
-                onField={onField} onRestore={onRestore} onSheet={onSheet} />
+                onField={onField} onRestore={onRestore} />
             ))}
           </ul>}
     </>
   );
 }
 
-function TaskCard({ o, onMove, onRemove, onEdit, onField, onRestore, onSheet }) {
-  const flow = flowOf(o);
-  const idx = flow.indexOf(o.狀態);
-  const next = idx >= 0 && idx < flow.length - 1 ? flow[idx + 1] : null;
+function TaskCard({ o, onMove, onRemove, onEdit, onField, onRestore }) {
+  const idx = FLOW.indexOf(o.狀態);
+  const next = idx >= 0 && idx < FLOW.length - 1 ? FLOW[idx + 1] : null;
 
   return (
     <li className="rounded p-3" style={{ background: C.card, border: `1px solid ${C.line}` }}>
@@ -2819,31 +2488,21 @@ function TaskCard({ o, onMove, onRemove, onEdit, onField, onRestore, onSheet }) 
         <div>
           <div className="font-medium">
             {o.單位}
-            {(isTicket(o) || isVisit(o)) && (
+            {isTicket(o) && (
               <span className="ml-2 text-xs font-normal px-1.5 py-0.5 rounded"
-                style={{ border: `1px solid ${C.brand}`, color: C.brand }}>{o.類別}</span>
+                style={{ border: `1px solid ${C.brand}`, color: C.brand }}>票務</span>
             )}
           </div>
           <div className="text-xs mt-0.5 tnum" style={{ color: C.sub }}>
             {o.單號 || "—"}
-            {isVisit(o)
-              ? <>・{o.日期 || "日期未定"}　{toText(theVisit(o).活動類型)}
-                  {theVisit(o).開始 ? `　${theVisit(o).開始}–${theVisit(o).撤場}` : ""}</>
-              : o.日期
-                ? <>・{o.日期}　{o.包場 ? "包場" : o.場次 === "全" ? "全場"
-                    : o.場次 ? o.場次 + "半場" : ""}・全票 {o.全票}・共 {headcount(o)} 位</>
-                : <>・無檔期</>}
+            {o.日期
+              ? <>・{o.日期}　{o.包場 ? "包場" : o.場次 === "全" ? "全場"
+                  : o.場次 ? o.場次 + "半場" : ""}・全票 {o.全票}・共 {headcount(o)} 位</>
+              : <>・無檔期</>}
           </div>
           {(o.明細 || []).length > 0 && (
             <div className="text-xs mt-0.5" style={{ color: C.sub }}>
               {(o.明細 || []).map((r) => r.name).filter(Boolean).join("、")}
-            </div>
-          )}
-          {isVisit(o) && (theVisit(o).物品 || []).length > 0 && (
-            <div className="text-xs mt-0.5" style={{ color: C.sub }}>
-              物品 {(theVisit(o).物品 || []).length} 項・
-              出發前已確認 {(theVisit(o).物品 || []).filter((g) => g.出發).length}・
-              撤場已回收 {(theVisit(o).物品 || []).filter((g) => g.回收).length}
             </div>
           )}
           <div className="text-xs mt-0.5" style={{ color: C.sub }}>
@@ -2904,17 +2563,12 @@ function TaskCard({ o, onMove, onRemove, onEdit, onField, onRestore, onSheet }) 
             <button onClick={() => onMove(o.id, "取消")}
               className="px-2.5 py-1 text-xs rounded"
               style={{ border: `1px solid ${C.line}`, color: C.sub }}>
-              {isVisit(o) ? "取消這場" : "取消"}
+              取消
             </button>
           </>
         )}
-        {isVisit(o) && onSheet ? (
-          <button onClick={() => onSheet(o)} className="px-2.5 py-1 text-xs rounded"
-            style={{ border: `1px solid ${C.brand}`, color: C.brand }}>開出訪單</button>
-        ) : (
-          <button onClick={() => onEdit(o)} className="px-2.5 py-1 text-xs rounded"
-            style={{ border: `1px solid ${C.line}` }}>修改內容</button>
-        )}
+        <button onClick={() => onEdit(o)} className="px-2.5 py-1 text-xs rounded"
+          style={{ border: `1px solid ${C.line}` }}>修改內容</button>
         <button onClick={() => onRemove(o.id)} className="px-2.5 py-1 text-xs rounded ml-auto"
           style={{ color: C.badText }}>刪除</button>
       </div>
@@ -3074,286 +2728,229 @@ function CalendarAdmin({ cal, onSave, onDelete, say }) {
   );
 }
 
-/* ------------------------------------------------------- 2 樓：表單介面 */
-/** 列印用的格線表格，樣式寫死不吃 Tailwind，列印才不會跑掉 */
-const SH = {
-  wrap:  { fontFamily: FONT, color: "#000", fontSize: "9.2pt", lineHeight: 1.4 },
-  h1:    { textAlign: "center", fontSize: "15pt", fontWeight: 700, margin: "0 0 3mm" },
-  bar:   { border: ".75pt solid #000", borderBottom: 0, padding: "1mm 1.5mm",
-           fontWeight: 700, fontSize: "9pt", marginTop: "3mm", background: "#ECF0DF" },
-  tbl:   { width: "100%", borderCollapse: "collapse", tableLayout: "fixed" },
-  td:    { border: ".75pt solid #000", padding: "1.2mm 1.6mm", verticalAlign: "middle",
-           wordBreak: "break-word" },
-  lab:   { border: ".75pt solid #000", padding: "1.2mm 1.6mm", background: "#ECF0DF",
-           fontWeight: 600, whiteSpace: "nowrap", textAlign: "center" },
-  blank: { border: ".75pt solid #000", padding: "1.2mm 1.6mm", height: "11mm",
-           verticalAlign: "top" },
-  stamp: { textAlign: "right", fontSize: "7.5pt", color: "#555", marginBottom: "1mm",
-           fontVariantNumeric: "tabular-nums" },
-  note:  { fontSize: "7.6pt", color: "#555", marginTop: "1mm" },
-};
-const nowStamp = () => {
-  const d = new Date();
-  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}-`
-       + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-};
-const WDAY = ["日", "一", "二", "三", "四", "五", "六"];
-const dateWD = (x) => x ? `${x}（${WDAY[new Date(x).getDay()]}）` : "";
+/* ----------------------------------------------------------------- 匯出 */
+const MONEY_COLS = ["預估總營收", "已付金額", "未付金額"];
 
-/** 出訪單：確認兩端窗口、時間地點、物品清單、互動橋段 */
-function VisitSheet({ o, customer, rep }) {
-  const v = theVisit(o);
-  const c = customer || {};
-  const L = (t) => <td style={SH.lab}>{t}</td>;
-  const D = (t, span) => <td style={SH.td} colSpan={span}>{t || ""}</td>;
-
-  return (
-    <div style={SH.wrap}>
-      <div style={SH.stamp}>{nowStamp()}</div>
-      <h1 style={SH.h1}>KZ 校園擺攤出訪單</h1>
-
-      <table style={SH.tbl}>
-        <colgroup><col style={{ width: "14%" }} /><col style={{ width: "28%" }} />
-          <col style={{ width: "14%" }} /><col style={{ width: "19%" }} />
-          <col style={{ width: "11%" }} /><col style={{ width: "14%" }} /></colgroup>
-        <tbody>
-          <tr>{L("學校")}{D(o.單位, 3)}{L("單號")}{D(o.單號)}</tr>
-          <tr>{L("活動日期")}{D(dateWD(o.日期))}{L("活動類型")}{D(toText(v.活動類型))}
-              {L("狀態")}{D(o.狀態)}</tr>
-          <tr>{L("進場／開始／撤場")}
-              {D([v.進場, v.開始, v.撤場].filter(Boolean).join(" ／ "), 3)}
-              {L("預估人流")}{D(v.預估人流)}</tr>
-          <tr>{L("攤位位置")}{D(v.攤位)}{L("攤位費用與規定")}{D(v.攤位費用, 3)}</tr>
-          <tr>{L("學校提供")}{D(v.學校提供, 3)}
-              {L("預估支出")}{D(v.預估支出 ? `NT$ ${money(v.預估支出)}` : "")}</tr>
-          <tr>{L("學校屬性")}
-              {D([c.school_type, toText(c.level), c.district].filter(Boolean).join("　"))}
-              {L("規模")}{D(c.classes || c.students
-                ? `${c.classes || "—"} 班 ／ ${c.students || "—"} 人` : "")}
-              {L("引薦")}{D(c.referral || v.引薦來源)}</tr>
-        </tbody>
-      </table>
-
-      <div style={SH.bar}>一、兩端窗口</div>
-      <table style={{ ...SH.tbl, borderTop: 0 }}>
-        <colgroup><col style={{ width: "14%" }} /><col style={{ width: "20%" }} />
-          <col style={{ width: "22%" }} /><col style={{ width: "44%" }} /></colgroup>
-        <tbody>
-          <tr><td style={SH.lab}>學校窗口</td>{D(c.contact || o.聯絡人)}
-              {D(c.phone || o.電話)}{D(c.email)}</tr>
-          {(v.承辦 || []).map((r, i) => (
-            <tr key={i}><td style={SH.lab}>{r.角色}</td>{D(r.姓名)}{D(r.電話)}{D(r.負責)}</tr>
-          ))}
-          <tr><td style={SH.lab}>可能 Key man</td>{D(toText(v.keyman), 3)}</tr>
-        </tbody>
-      </table>
-
-      <div style={SH.bar}>二、物品清單　　出發前逐項打勾，撤場時再確認一次是否全數帶回</div>
-      <table style={{ ...SH.tbl, borderTop: 0 }}>
-        <colgroup><col style={{ width: "34%" }} /><col style={{ width: "10%" }} />
-          <col style={{ width: "10%" }} /><col style={{ width: "10%" }} />
-          <col style={{ width: "10%" }} /><col style={{ width: "26%" }} /></colgroup>
-        <tbody>
-          <tr>{L("品項")}{L("標準")}{L("實帶")}{L("出發前")}{L("撤場回收")}{L("備註")}</tr>
-          {(v.物品 || []).length === 0
-            ? <tr>{D("（未帶入清單）", 6)}</tr>
-            : (v.物品 || []).map((g, i) => (
-              <tr key={i}>{D(g.name)}
-                <td style={{ ...SH.td, textAlign: "center" }}>{g.標準}</td>
-                <td style={{ ...SH.td, textAlign: "center" }}>{g.實帶}</td>
-                <td style={{ ...SH.td, textAlign: "center" }}>{g.出發 ? "☑" : "☐"}</td>
-                <td style={{ ...SH.td, textAlign: "center" }}>{g.回收 ? "☑" : "☐"}</td>
-                {D(g.備註)}</tr>
-            ))}
-        </tbody>
-      </table>
-
-      <div style={SH.bar}>三、現場互動橋段　　從「吸引停留」帶到「留下聯繫」，現場用正字記錄人次</div>
-      <table style={{ ...SH.tbl, borderTop: 0 }}>
-        <colgroup><col style={{ width: "7%" }} /><col style={{ width: "25%" }} />
-          <col style={{ width: "48%" }} /><col style={{ width: "20%" }} /></colgroup>
-        <tbody>
-          <tr>{L("步驟")}{L("互動內容")}{L("本場做法／話術")}{L("人次紀錄")}</tr>
-          {(v.互動 || []).map((r, i) => (
-            <tr key={i}>
-              <td style={{ ...SH.td, textAlign: "center" }}>{i + 1}</td>
-              {D(r.內容)}{D(r.做法)}
-              <td style={{ ...SH.blank, textAlign: "center" }}>{r.人次}</td>
-            </tr>
-          ))}
-          <tr>{L("告示牌文案")}{D(v.告示牌, 3)}</tr>
-        </tbody>
-      </table>
-
-      <div style={SH.bar}>四、事後成效與檢討　　活動結束後 3 天內填寫</div>
-      <table style={{ ...SH.tbl, borderTop: 0 }}>
-        <colgroup><col style={{ width: "20%" }} /><col style={{ width: "13%" }} />
-          <col style={{ width: "20%" }} /><col style={{ width: "13%" }} />
-          <col style={{ width: "20%" }} /><col style={{ width: "14%" }} /></colgroup>
-        <tbody>
-          <tr>{L("攤位停留人次")}{D((v.成效 || {}).停留)}
-              {L("接觸 Key man")}{D((v.成效 || {}).keyman)}
-              {L("新增粉專追蹤")}{D((v.成效 || {}).粉專)}</tr>
-          <tr>{L("預約參訪組數")}{D((v.成效 || {}).預約)}
-              {L("取得名片／名單")}{D((v.成效 || {}).名片, 3)}</tr>
-          {[["做得好的地方", "好"], ["遇到的問題", "問題"],
-            ["下次要調整", "調整"], ["後續追蹤", "追蹤"]].map(([lab, k]) => (
-            <tr key={k}><td style={SH.lab}>{lab}</td>
-              <td style={SH.blank} colSpan={5}>{(v.檢討 || {})[k]}</td></tr>
-          ))}
-        </tbody>
-      </table>
-
-      <p style={SH.note}>
-        承辦業務：{rep ? `${rep.name}　分機 ${rep.ext}　${rep.email}` : (o.負責窗口 || "")}
-        　｜　KidZania Taipei 孩享趣股份有限公司
-      </p>
-    </div>
-  );
+/* ------------------------------------------------------------- 匯出：週曆 */
+const WD_CH = ["日", "一", "二", "三", "四", "五", "六"];
+/** 一週固定星期六起、星期五迄。六→0、日→1 …… 五→6 */
+const weekIdx = (d) => (parse(d).getDay() + 1) % 7;
+const weekStart = (d) => addDays(d, -weekIdx(d));
+/** 把區間切成一週七天。頭尾不足的那幾格會落在區間外，畫成空白 */
+function weeksOf(from, to) {
+  const out = [];
+  if (!parse(from) || !parse(to) || from > to) return out;
+  for (let s = weekStart(from); s <= to; s = addDays(s, 7))
+    out.push(Array.from({ length: 7 }, (_, i) => addDays(s, i)));
+  return out;
+}
+const GRID_ROWS = [
+  { key: "上", label: "上半場", time: "平日 09:00–14:00　假日 10:00–15:00" },
+  { key: "清", label: "中場",   time: "平日 14:00–15:00　假日 15:00–16:00" },
+  { key: "下", label: "下半場", time: "平日 15:00–20:00　假日 16:00–21:00" },
+];
+/** 那一格實際的時間。平日假日不一樣，所以每一格自己標 */
+const rowTime = (d, k) => k === "清"
+  ? (isHoliday(d) ? "15:00–16:00" : "14:00–15:00")
+  : sessionTime(d, k);
+/** 全場在上下半場都要出現；中場只有全場包場會壓住，其餘就是清場 */
+function cellOrders(list, slot) {
+  if (slot === "清") return list.filter((o) => o.包場 && o.場次 === "全");
+  return list.filter((o) => o.場次 === slot || o.場次 === "全");
+}
+const hasVenue = (o) => (+o.PR廳數 > 0) || (+o.劇院 > 0);
+/** 有訂交誼廳／劇院的往下排，同樣有訂的再按使用時間排 */
+const cellSort = (a, b) =>
+  (hasVenue(a) ? 1 : 0) - (hasVenue(b) ? 1 : 0) ||
+  String(a.PR開始 || "99:99").localeCompare(String(b.PR開始 || "99:99")) ||
+  String(a.單位 || "").localeCompare(String(b.單位 || ""));
+const prSpan = (o) => (o.PR開始 ? `${o.PR開始}–${o.PR結束 || ""}` : "時間未定");
+/** 一格裡要寫的每一行。螢幕、PDF、Excel 共用同一份內容 */
+function cellLines(o) {
+  const L = [o.單位 || "（未填單位）"];
+  const who = [o.聯絡人, o.電話].filter(Boolean).join("　");
+  if (who) L.push(who);
+  const heads = [`大 ${+o.半票 || 0}`, `小 ${+o.全票 || 0}`];
+  if (+o.免票 > 0) heads.push(`免 ${o.免票}`);
+  if (+o.愛心 > 0) heads.push(`愛 ${o.愛心}`);
+  L.push(heads.join(" / ") + (+o.餐飲 > 0 ? "・訂餐" : ""));
+  if (+o.PR廳數 > 0) L.push(`交誼廳 ${o.PR廳數} 廳　${prSpan(o)}`);
+  if (o.PR方案) L.push(`派對 ${o.PR方案}　${prSpan(o)}`);
+  if (+o.劇院 > 0) L.push(`劇院 ${o.劇院}`);
+  if (o.包場) L.push("包場");
+  return L;
 }
 
-/** 2 樓：進來就能寫。右上角調用既有記錄，右下角新增或儲存。 */
-function FormsView({ sheet, setSheet, orders, customers, reps, assigns, products, me,
-                     editing, setEditing, onSubmit, onSaveAsNew, say }) {
-  const [callOpen, setCallOpen] = useState(false);
-  const visits = orders.filter(isVisit).sort(byDate);
-  const saved = editing ? orders.find((x) => x.id === editing.id) : null;
-  const customer = saved ? customers.find((c) => c.id === saved.客戶id) : null;
-  const rep = saved ? reps.find((r) => r.name === saved.負責窗口) : null;
+function WeekGrid({ orders, say }) {
+  const now = new Date();
+  const [from, setFrom] = useState(iso(new Date(now.getFullYear(), now.getMonth(), 1)));
+  const [to, setTo] = useState(iso(new Date(now.getFullYear(), now.getMonth() + 1, 0)));
 
-  if (sheet === "報價單") {
-    return (
-      <>
-        <SheetTabs sheet={sheet} setSheet={setSheet} />
-        <div className="rounded p-8 text-center"
-          style={{ background: C.card, border: `1px dashed ${C.line}` }}>
-          <p className="font-medium">報價單</p>
-          <p className="text-sm mt-1" style={{ color: C.sub }}>
-            先架殼。等出訪單的格式定了，再把報價單搬進來。
-          </p>
-        </div>
-      </>
-    );
-  }
+  /* 週曆只看有檔期的活動單。票務沒日期，取消的不佔場地 */
+  const byDay = useMemo(() => {
+    const m = {};
+    orders.filter((o) => o.日期 && !isTicket(o) && !isDead(o))
+      .forEach((o) => { (m[o.日期] = m[o.日期] || []).push(o); });
+    return m;
+  }, [orders]);
+  const weeks = useMemo(() => weeksOf(from, to), [from, to]);
+  const inRange = (d) => d >= from && d <= to;
+  const cellOf = (d, k) => cellOrders(byDay[d] || [], k).slice().sort(cellSort);
+  const dayHead = (d) =>
+    `${d.slice(5).replace("-", "/")}（${WD_CH[parse(d).getDay()]}）${isHoliday(d) ? "假日" : "平日"}`;
+
+  const toExcel = () => {
+    const aoa = [];
+    weeks.forEach((wk) => {
+      aoa.push([`${wk[0]} ～ ${wk[6]}`]);
+      aoa.push(["時段", ...wk.map((d) => (inRange(d) ? dayHead(d) : ""))]);
+      GRID_ROWS.forEach((r) => {
+        aoa.push([r.label, ...wk.map((d) => {
+          if (!inRange(d)) return "";
+          const list = cellOf(d, r.key);
+          if (r.key === "清" && !list.length) return `${rowTime(d, r.key)}\n清場`;
+          if (!list.length) return rowTime(d, r.key);
+          return [rowTime(d, r.key), ...list.map((o) => cellLines(o).join("\n"))].join("\n");
+        })]);
+      });
+      aoa.push([]);
+    });
+    if (!aoa.length) { say("這個區間沒有東西可以匯出"); return; }
+    try {
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws["!cols"] = [{ wch: 9 }, ...Array.from({ length: 7 }, () => ({ wch: 28 }))];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "週曆");
+      XLSX.writeFile(wb, `週曆_${from}_${to}.xlsx`);
+      say("已匯出週曆 Excel，一張分頁、每週往下接");
+    } catch (e) { say("這個環境擋下了下載"); }
+  };
+
+  /** 列印走瀏覽器的「另存為 PDF」，版面由列印 CSS 控制：橫式、一週一頁 */
+  const toPDF = () => {
+    document.body.classList.add("printweek");
+    const done = () => {
+      document.body.classList.remove("printweek");
+      window.removeEventListener("afterprint", done);
+    };
+    window.addEventListener("afterprint", done);
+    setTimeout(() => { window.print(); setTimeout(done, 800); }, 60);
+  };
 
   return (
     <>
-      <div className="flex gap-1 mb-3 flex-wrap items-center">
-        <SheetTabs sheet={sheet} setSheet={setSheet} inline />
-        <span className="flex-1" />
-        {saved && (
-          <span className="text-xs tnum mr-1" style={{ color: C.brand }}>
-            修改中　{saved.單號 || saved.單位}
-          </span>
-        )}
-        <button onClick={() => setCallOpen(true)} className="px-3 py-1.5 text-sm rounded"
-          style={{ border: `1px solid ${C.brand}`, color: C.brand }}>
-          調用　<span className="tnum">{visits.length}</span>
-        </button>
-        {editing && (
-          <button onClick={() => setEditing(null)} className="px-3 py-1.5 text-sm rounded"
-            style={{ border: `1px solid ${C.line}`, color: C.sub }}>清空重寫</button>
-        )}
-        {saved && (
-          <button onClick={() => window.print()} className="px-4 py-1.5 text-sm rounded"
-            style={{ background: C.brand, color: "#fff" }}>列印 ／ 存成 PDF</button>
-        )}
+      <div className="flex gap-2 mb-3 flex-wrap items-end">
+        <label className="text-xs" style={{ color: C.sub }}>
+          起<br />
+          <input type="date" value={from} max={to}
+            onChange={(e) => setFrom(e.target.value)} style={{ ...inp, width: 150 }} />
+        </label>
+        <label className="text-xs" style={{ color: C.sub }}>
+          迄<br />
+          <input type="date" value={to} min={from}
+            onChange={(e) => setTo(e.target.value)} style={{ ...inp, width: 150 }} />
+        </label>
+        <button onClick={toExcel} className="px-4 py-2 text-sm rounded"
+          style={{ background: C.brand, color: "#fff" }}>下載 Excel</button>
+        <button onClick={toPDF} className="px-4 py-2 text-sm rounded"
+          style={{ border: `1px solid ${C.brand}`, color: C.brand }}>列印／存成 PDF</button>
       </div>
+      <p className="text-xs mb-3" style={{ color: C.sub }}>
+        一週一張，星期六起算、星期五結束。選到的區間之外那幾格留白，所以 11/1 開始會看到第一欄是空的。
+        PDF 請在列印視窗選「橫向」；Excel 是一張分頁、每週往下接。
+      </p>
 
-      {saved && (
-        <p className="text-xs mb-3" style={{ color: C.sub }}>
-          這一筆隨時都能回來改、改完隨時能印。列印的是
-          <span style={{ fontWeight: 600, color: C.ink }}>已儲存</span>的版本，
-          所以出門前記得先按「儲存修改」再按列印。
-        </p>
-      )}
-
-      <RequestForm
-        key={editing ? editing.id : "new"}
-        inline date={null} orders={orders} editing={editing} kind="外訪"
-        customers={customers} reps={reps} assigns={assigns} products={products} me={me}
-        say={say} onClose={() => setEditing(null)} onSubmit={onSubmit}
-        onSaveAsNew={onSaveAsNew} />
-
-      {saved && (
-        <>
-          <div className="flex items-center gap-2 mt-5 mb-2 flex-wrap">
-            <span className="text-xs font-medium" style={{ color: C.brand }}>
-              出訪單預覽（已儲存的版本）
-            </span>
-            <span className="flex-1" />
-            <button onClick={() => window.print()} className="px-4 py-2 text-sm rounded"
-              style={{ background: C.brand, color: "#fff" }}>列印 ／ 存成 PDF</button>
-          </div>
-          <div id="sheetbox" className="rounded p-5"
-            style={{ background: "#fff", border: `1px solid ${C.line}` }}>
-            <VisitSheet o={saved} customer={customer} rep={rep} />
-          </div>
-          <p className="text-xs mt-2" style={{ color: C.sub }}>
-            按「列印」只會印這張單，上面的表單和分頁列都不會跟著印出來。
-          </p>
-        </>
-      )}
-
-      {callOpen && (
-        <Modal title="調用外訪記錄" onClose={() => setCallOpen(false)} wide>
-          {visits.length === 0 ? (
-            <p className="text-sm" style={{ color: C.sub }}>還沒有任何外訪記錄。</p>
-          ) : (
-            <ul className="grid gap-2">
-              {visits.map((x) => (
-                <li key={x.id}>
-                  <button onClick={() => { setEditing(x); setCallOpen(false); }}
-                    className="w-full text-left rounded p-3"
-                    style={{ background: C.card,
-                      border: `1px solid ${editing && editing.id === x.id ? C.brand : C.line}` }}>
-                    <div className="font-medium">
-                      {x.單位}
-                      <span className="ml-2 text-xs font-normal" style={{ color: C.sub }}>
-                        {x.狀態}
-                      </span>
-                      {editing && editing.id === x.id && (
-                        <span className="ml-2 text-xs font-normal" style={{ color: C.brand }}>
-                          目前這一筆
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-xs mt-0.5 tnum" style={{ color: C.sub }}>
-                      {x.日期 || "日期未定"}　{toText(theVisit(x).活動類型)}
-                      物品 {(theVisit(x).物品 || []).length} 項　{x.單號}
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="text-xs mt-3" style={{ color: C.sub }}>
-            調用之後是修改這一筆，不是複製。要辦同一間學校的第二場，
-            調用舊的、改日期、再按「另存為新的一場」。
-          </p>
-        </Modal>
-      )}
+      <div id="weekbox">
+        {weeks.length === 0
+          ? <p className="text-sm noprint" style={{ color: C.sub }}>這個區間是空的。</p>
+          : weeks.map((wk) => (
+            <div key={wk[0]} className="wk mb-5">
+              <div className="text-sm font-semibold mb-1 tnum">{wk[0]} ～ {wk[6]}</div>
+              <div className="overflow-x-auto rounded"
+                style={{ border: `1px solid ${C.line}`, background: C.card }}>
+                <table className="text-xs w-full" style={{ borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th className="px-2 py-1.5 text-left align-bottom"
+                        style={{ borderBottom: `1px solid ${C.line}`, borderRight: `1px solid ${C.line}`,
+                                 color: C.sub, fontWeight: 600, width: 96 }}>時段</th>
+                      {wk.map((d) => (
+                        <th key={d} className="px-2 py-1.5 text-left tnum"
+                          style={{ borderBottom: `1px solid ${C.line}`, borderRight: `1px solid ${C.line}`,
+                                   fontWeight: 600, width: "13%",
+                                   background: inRange(d) && isHoliday(d) ? C.paper : "transparent",
+                                   color: inRange(d) ? C.ink : C.line }}>
+                          {inRange(d) ? dayHead(d) : ""}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {GRID_ROWS.map((r) => (
+                      <tr key={r.key}>
+                        <th className="px-2 py-1.5 text-left align-top"
+                          style={{ borderBottom: `1px solid ${C.line}`, borderRight: `1px solid ${C.line}`,
+                                   fontWeight: 600 }}>
+                          {r.label}
+                          <div className="font-normal tnum" style={{ color: C.sub, fontSize: 10 }}>
+                            {r.time.split("　").map((t) => <div key={t}>{t}</div>)}
+                          </div>
+                        </th>
+                        {wk.map((d) => {
+                          if (!inRange(d)) return (
+                            <td key={d} style={{ borderBottom: `1px solid ${C.line}`,
+                                                 borderRight: `1px solid ${C.line}`, background: C.paper }} />
+                          );
+                          const list = cellOf(d, r.key);
+                          return (
+                            <td key={d} className="px-1.5 py-1 align-top"
+                              style={{ borderBottom: `1px solid ${C.line}`,
+                                       borderRight: `1px solid ${C.line}` }}>
+                              <div className="tnum" style={{ color: C.sub, fontSize: 10 }}>
+                                {rowTime(d, r.key)}
+                              </div>
+                              {r.key === "清" && list.length === 0
+                                ? <div style={{ color: C.sub }}>清場</div>
+                                : list.map((o) => (
+                                  <div key={o.id} className="mt-1 pt-1"
+                                    style={{ borderTop: `1px dotted ${C.line}` }}>
+                                    {cellLines(o).map((t, i) => (
+                                      <div key={i} className={i === 0 ? "font-medium" : "tnum"}
+                                        style={i === 0 ? null : { color: C.sub, fontSize: 10 }}>{t}</div>
+                                    ))}
+                                  </div>
+                                ))}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+      </div>
     </>
   );
 }
 
-function SheetTabs({ sheet, setSheet, inline }) {
+/** 匯出底下兩種看法：逐筆清單給 AC 看錢，週曆給現場看檔期 */
+function ExportTabs({ tab, setTab }) {
   return (
-    <div className={inline ? "flex gap-1" : "flex gap-1 mb-3"}>
-      {["出訪單", "報價單"].map((k) => (
-        <button key={k} onClick={() => setSheet(k)} className="px-3 py-1.5 text-sm rounded"
-          style={sheet === k ? { background: C.ink, color: C.paper }
-                             : { color: C.sub, border: `1px solid ${C.line}` }}>{k}</button>
+    <div className="flex gap-1.5 mb-4 flex-wrap noprint">
+      {["逐筆清單", "週曆"].map((k) => (
+        <button key={k} onClick={() => setTab(k)} className="px-3 py-1.5 text-sm rounded"
+          style={tab === k ? { background: C.brand, color: "#fff" }
+                           : { border: `1px solid ${C.line}`, color: C.sub }}>{k}</button>
       ))}
     </div>
   );
 }
 
-/* ----------------------------------------------------------------- 匯出 */
-const MONEY_COLS = ["預估總營收", "已付金額", "未付金額"];
-
 function ExportView({ orders, say }) {
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState("逐筆清單");
   const [cats, setCats] = useState(CATEGORIES);        // 勾哪些就匯出哪些
   const toggleCat = (k) => setCats((p) =>
     p.includes(k) ? (p.length > 1 ? p.filter((x) => x !== k) : p) : [...p, k]);
@@ -3403,19 +3000,12 @@ function ExportView({ orders, say }) {
       ).join("；"),
       建立日: o.建立, 佔用名額: occupies(o) && o.日期 ? "是" : "否",
       報價明細: itemsText(o.明細),
-      外訪類型: isVisit(o) ? toText(theVisit(o).活動類型) : "",
-      外訪時間: isVisit(o)
-        ? [theVisit(o).進場, theVisit(o).開始, theVisit(o).撤場].filter(Boolean).join("／") : "",
-      外訪預估支出: isVisit(o) ? (+theVisit(o).預估支出 || 0) : "",
-      外訪成效: isVisit(o)
-        ? Object.entries(theVisit(o).成效 || {})
-            .filter(([, x]) => x).map(([k, x]) => `${k} ${x}`).join("；") : "",
       備註: o.備註,
     };
   });
 
   const daily = useMemo(() => {
-    const set = [...new Set(orders.filter((o) => o.日期 && !isVisit(o) && !isTicket(o))
+    const set = [...new Set(orders.filter((o) => o.日期 && !isTicket(o))
       .map((o) => o.日期))].sort();
     return set.map((d) => {
       const s = dayStats(orders, d);
@@ -3455,8 +3045,18 @@ function ExportView({ orders, say }) {
     return <p className="text-sm" style={{ color: C.sub }}>還沒有資料可以匯出。</p>;
   }
 
+  if (tab === "週曆") {
+    return (
+      <>
+        <ExportTabs tab={tab} setTab={setTab} />
+        <WeekGrid orders={orders} say={say} />
+      </>
+    );
+  }
+
   return (
     <>
+      <ExportTabs tab={tab} setTab={setTab} />
       <div className="flex gap-2 mb-4 flex-wrap">
         <button onClick={download} disabled={busy} className="px-4 py-2 text-sm rounded"
           style={{ background: C.brand, color: "#fff" }}>
