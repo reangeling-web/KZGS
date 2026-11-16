@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v8.3　11/16 週曆備註";
+const BUILD = "v8.5　11/16 週曆整週顯示";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -2991,9 +2991,10 @@ function cellLines(o) {
 }
 
 function WeekGrid({ orders, say }) {
-  const now = new Date();
-  const [from, setFrom] = useState(iso(new Date(now.getFullYear(), now.getMonth(), 1)));
-  const [to, setTo] = useState(iso(new Date(now.getFullYear(), now.getMonth() + 1, 0)));
+  /* 預設起日＝今天；迄日＝從今天所在那週（星期六起）算起第四週的星期五，剛好四週 */
+  const today = todayISO();
+  const [from, setFrom] = useState(today);
+  const [to, setTo] = useState(addDays(weekStart(today), 7 * 4 - 1));
 
   /* 週曆只看有檔期的活動單。票務沒日期，取消的不佔場地 */
   const byDay = useMemo(() => {
@@ -3003,7 +3004,10 @@ function WeekGrid({ orders, say }) {
     return m;
   }, [orders]);
   const weeks = useMemo(() => weeksOf(from, to), [from, to]);
-  const inRange = (d) => d >= from && d <= to;
+  /* 整週都顯示：起迄日落在哪一週，那一週的星期六到星期五全部照常顯示內容 */
+  const shownFrom = weeks.length ? weeks[0][0] : from;
+  const shownTo = weeks.length ? weeks[weeks.length - 1][6] : to;
+  const inRange = (d) => d >= shownFrom && d <= shownTo;
   const cellOf = (d, k) => cellOrders(byDay[d] || [], k).slice().sort(cellSort);
   const isBuyout = (d) => (byDay[d] || []).some((o) => o.包場);
   const boCell = (d, k) => inBuyout(d, k, byDay[d] || []);
@@ -3079,7 +3083,7 @@ function WeekGrid({ orders, say }) {
           style={{ border: `1px solid ${C.brand}`, color: C.brand }}>列印／存成 PDF</button>
       </div>
       <p className="text-xs mb-3" style={{ color: C.sub }}>
-        一週一張，星期六起算、星期五結束。選到的區間之外那幾格留白，所以 11/1 開始會看到第一欄是空的。
+        一週一張，星期六起算、星期五結束。預設從今天起看四週。起迄日所在的那一週會整週顯示，不留白。
         PDF 請在列印視窗選「橫向」；Excel 是一張分頁、每週往下接。
       </p>
 
