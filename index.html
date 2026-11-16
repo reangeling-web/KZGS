@@ -93,7 +93,7 @@ function prPeak(list, start, end, qty) {
 const TABS = ["檔期", "任務", "匯出"];
 
 /** 版本標記：傳檔後看畫面左上角就知道有沒有更新成功 */
-const BUILD = "v7.6　11/16 包場時間反色";
+const BUILD = "v8.0　11/16 登入先看週曆";
 
 const PARTY_PLANS = ["同樂派對 6小2大", "歡聚派對 10小4大", "慶典派對 14小6大"];
 
@@ -263,6 +263,9 @@ function dayStats(orders, dateStr, excludeId) {
   const pooled = !isHoliday(dateStr);
   const dayChild = eff.reduce((a, o) => a + (+o.全票 || 0), 0);
   const dayAll = eff.reduce((a, o) => a + headcount(o), 0);
+  /* 給未登入的人看的粗略人數。小＝孩童票＋免票，大＝成人票＋愛心票，兩個加起來就是總人數 */
+  const daySmall = eff.reduce((a, o) => a + (+o.全票 || 0) + (+o.免票 || 0), 0);
+  const dayBig   = eff.reduce((a, o) => a + (+o.半票 || 0) + (+o.愛心 || 0), 0);
 
   const rest = pooled ? left(dayChild, dayAll) : null;
   const am = pooled ? rest : left(amChild, amAll);
@@ -276,7 +279,7 @@ function dayStats(orders, dateStr, excludeId) {
     full: amLock || pmLock ? 0 : (pooled ? rest : Math.min(am, pm)),
     amChild, pmChild, amAll, pmAll,
     amOther: amAll - amChild, pmOther: pmAll - pmChild,
-    dayChild, dayAll,
+    dayChild, dayAll, daySmall, dayBig,
     peak: pooled ? dayAll : Math.max(amAll, pmAll),
     /* 實虛線用：各場次已收佔預定的比例，決定那條線有多少比例是實線 */
     amPaidRatio: payRatio(eff, ["上", "全"]),
@@ -1149,7 +1152,7 @@ function App() {
   const [session, setSession] = useState(undefined);   // undefined = 還在確認
   const [orders, setOrders] = useState([]);
   const [loaded, setLoaded] = useState(false);
-  const [tab, setTab] = useState("首頁");
+  const [tab, setTab] = useState("匯出");   // 登入第一眼就是週曆
   const [cursor, setCursor] = useState({ y: 2026, m: 12 });
   const [picked, setPicked] = useState(null);
   const [formOpen, setFormOpen] = useState(false);
@@ -1160,6 +1163,8 @@ function App() {
 
   const say = (m) => { setToast(m); setTimeout(() => setToast(null), 3200); };
   const [guestMode, setGuestMode] = useState(false);
+  const [expTab, setExpTab] = useState("週曆");       // 匯出底下看哪一種
+  const justIn = useRef(false);                       // 這次 session 有沒有導過頁了
   const [cal, setCal] = useState([]);
   const [reps, setReps] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -1308,6 +1313,23 @@ function App() {
     await reload();
   };
 
+  /* 一登入就把人帶到匯出的週曆；登出後下次再登入會再帶一次 */
+  useEffect(() => {
+    if (session && !justIn.current) {
+      justIn.current = true;
+      setExpTab("週曆"); setTab("匯出");
+    }
+    if (!session) justIn.current = false;
+  }, [session]);
+
+  /* 訪客只看得到檔期，別讓他停在看不到東西的頁籤 */
+  useEffect(() => { if (guest) setTab("檔期"); }, [guest]);
+
+  /* 還沒登記在業務建檔的帳號只有檔期，匯出對他是空白 */
+  useEffect(() => {
+    if (!guest && tab !== "首頁" && !myTabs.includes(tab)) setTab(myTabs[0]);
+  }, [registered, guest, tab]);
+
   if (session === undefined) return <Splash text="載入中…" />;
   if (!session && !guestMode) return <LoginPage onGuest={() => setGuestMode(true)} />;
 
@@ -1395,6 +1417,7 @@ function App() {
           <CalendarView
             getDay={getDay} cursor={cursor} setCursor={setCursor}
             picked={picked} setPicked={setPicked} admin={admin} guest={guest}
+            onLogin={() => { setGuestMode(false); setLoaded(false); }}
             onNew={(d) => { setFormKind("活動"); setPicked(d); setFormOpen(true); }}
             onEdit={(o) => setEditing(o)}
           />
@@ -1407,7 +1430,8 @@ function App() {
         {tab === "行事曆" && admin && (
           <CalendarAdmin cal={cal} onSave={saveCal} onDelete={delCal} say={say} />
         )}
-        {tab === "匯出" && admin && <ExportView orders={orders} say={say} />}
+        {tab === "匯出" && admin
+          && <ExportView orders={orders} say={say} tab={expTab} setTab={setExpTab} />}
 
         {tab === "業務建檔" && admin && registered && (
           <RepsView rows={reps} assignments={assigns} onSave={loadMaster} say={say} />
@@ -1476,7 +1500,7 @@ const CSS = `
 `;
 
 /* ------------------------------------------------------------ 檔期預覽 */
-function CalendarView({ getDay, cursor, setCursor, picked, setPicked, onNew, onEdit, admin, guest }) {
+function CalendarView({ getDay, cursor, setCursor, picked, setPicked, onNew, onEdit, admin, guest, onLogin }) {
   const { y, m } = cursor;
   const first = new Date(y, m - 1, 1);
   const days = new Date(y, m, 0).getDate();
@@ -1536,9 +1560,12 @@ function CalendarView({ getDay, cursor, setCursor, picked, setPicked, onNew, onE
       {picked
         ? <DayPanel date={picked} s={getDay(picked)} onNew={onNew} onEdit={onEdit}
             admin={admin} guest={guest} />
-        : <p className="text-sm mt-4" style={{ color: C.sub }}>
-            點一個日期看細節，或直接登記需求。
-          </p>}
+        : guest
+          ? <button onClick={onLogin} className="text-sm mt-4 underline"
+              style={{ color: C.brand }}>登入查看本周團體預訂狀況</button>
+          : <p className="text-sm mt-4" style={{ color: C.sub }}>
+              點一個日期看細節，或直接登記需求。
+            </p>}
     </>
   );
 }
@@ -1591,7 +1618,8 @@ function DayCell({ date, s, selected, onClick }) {
           <span className="text-xs tnum mt-auto"
             style={{ color: s.amLock || s.pmLock ? C.badText : TONE[toneOf(s.full)].t }}>
             {s.amLock ? "上包場" : s.pmLock ? "下包場"
-              : s.full <= 0 ? "額滿" : s.peak > 0 ? `已訂 ${s.peak}` : ""}
+              : s.full <= 0 ? "額滿"
+              : s.dayBig + s.daySmall > 0 ? `大 ${s.dayBig}　小 ${s.daySmall}` : ""}
           </span>
         </>
       )}
@@ -2997,9 +3025,8 @@ function ExportTabs({ tab, setTab }) {
   );
 }
 
-function ExportView({ orders, say }) {
+function ExportView({ orders, say, tab, setTab }) {
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState("逐筆清單");
   const [cats, setCats] = useState(CATEGORIES);        // 勾哪些就匯出哪些
   const toggleCat = (k) => setCats((p) =>
     p.includes(k) ? (p.length > 1 ? p.filter((x) => x !== k) : p) : [...p, k]);
